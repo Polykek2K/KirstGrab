@@ -134,7 +134,7 @@ root.geometry("500x350")
 default_bg = "#2c3e50"
 root.config(bg=default_bg)
 
-tk_custom_font = ("Arial", 10)
+tk_custom_font = ("Arial", 12)
 font_file = resource_path(os.path.join("fonts", "m6x11plus.ttf"))
 if os.path.exists(font_file):
     try:
@@ -147,11 +147,11 @@ if os.path.exists(font_file):
             except Exception:
                 pass
         try:
-            tk_custom_font = tkfont.Font(family=family_name, size=10)
+            tk_custom_font = tkfont.Font(family=family_name, size=12)
         except Exception:
-            tk_custom_font = (family_name, 10)
+            tk_custom_font = (family_name, 12)
     except Exception:
-        tk_custom_font = ("Arial", 10)
+        tk_custom_font = ("Arial", 12)
 
 bg_photo = None
 frame_bg = default_bg
@@ -182,7 +182,7 @@ format_menu.pack(side=tk.LEFT)
 entry = tk.Entry(root, width=60, font=tk_custom_font, bd=2, relief="flat")
 entry.pack(pady=5)
 
-output_text = tk.Text(root, height=10, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font)
+output_text = tk.Text(root, height=12, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font)
 output_text.pack(pady=5)
 
 btn_normal = None
@@ -194,12 +194,12 @@ if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path):
         btn_normal = ImageTk.PhotoImage(file=btn_normal_path)
         btn_pressed = ImageTk.PhotoImage(file=btn_pressed_path)
         button = ImageButton(root, normal_img=btn_normal, pressed_img=btn_pressed, command=on_download_clicked)
-        button.pack(pady=10)
+        button.pack(pady=12)
     except Exception:
         button = tk.Button(root, text="Download", font=tk_custom_font, padx=3, pady=3, command=on_download_clicked, height=1, width=7, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
-        button.pack(pady=10)
+        button.pack(pady=12)
 else:
     button = tk.Button(root, text="Download", font=tk_custom_font, padx=3, pady=3, command=on_download_clicked, height=1, width=7, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
-    button.pack(pady=10)
+    button.pack(pady=12)
 
 root.mainloop()
