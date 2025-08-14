@@ -126,7 +126,12 @@ def download_video():
 # Создаем окно
 root = tk.Tk()
 root.title("KirstGrab")
-root.iconbitmap("ico.ico")
+co_p = resource_path("icon.ico")
+if os.path.exists(ico_p):
+    try:
+        root.iconbitmap(ico_p)
+    except Exception:
+        pass
 root.geometry("500x350")
 
 # Устанавливаем цвет фона по умолчанию
