@@ -50,7 +50,7 @@ def build_command(url, download_path, format_choice, cookies_path):
         "--cookies", cookies_path,
         url,
         "-P", download_path,
-        "--progress"
+        "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
     if format_choice == "Audio only (MP3)":
         cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
@@ -66,7 +66,7 @@ def start_download(url, download_path, format_choice):
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             bufsize=1
         )
@@ -79,51 +79,36 @@ def start_download(url, download_path, format_choice):
     output_text.insert(tk.END, f"Загрузка: {url}\n")
 
     def read_output():
+        buffer_line = ""
         while True:
             try:
-                err_line = proc.stderr.readline()
+                ch = proc.stdout.read(1)
             except Exception:
-                err_line = ""
-            if err_line:
-                def append_err(line=err_line):
-                    output_text.insert(tk.END, f"Ошибка: {line}")
-                    output_text.see(tk.END)
-                root.after(0, append_err)
-                if "Sign in to confirm your age" in err_line:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    def prompt_and_restart():
-                        cookies = simpledialog.askstring(
-                            "Требуется аутентификация",
-                            "Введите cookies для обхода возрастного ограничения (в формате Netscape):",
-                            parent=root
-                        )
-                        if cookies:
-                            with open(os.path.abspath("cookies.txt"), "w", encoding="utf-8") as f:
-                                f.write(cookies)
-                            start_download(url, download_path, format_choice)
-                        else:
-                            output_text.insert(tk.END, "\nОтмена ввода cookies. Прервано.\n")
-                    root.after(0, prompt_and_restart)
+                ch = ""
+            if not ch:
+                if proc.poll() is not None:
+                    code = proc.returncode
+                    root.after(0, lambda: output_text.insert(tk.END,
+                        "\n✅ COMPLETED!" if code == 0 else f"\n❌ ERROR (code {code})"))
                     break
-            try:
-                out_line = proc.stdout.readline()
-            except Exception:
-                out_line = ""
-            if out_line:
-                def append_out(line=out_line):
-                    output_text.insert(tk.END, line)
+                continue
+
+            if ch == "\r":
+                # перезаписываем последнюю строку (для прогресса)
+                def replace_line(line=buffer_line):
+                    output_text.delete("end-2l", "end-1l")
+                    output_text.insert("end-1l", line)
                     output_text.see(tk.END)
-                root.after(0, append_out)
-            if proc.poll() is not None:
-                code = proc.returncode
-                if code == 0:
-                    root.after(0, lambda: output_text.insert(tk.END, "\n✅ COMPLETED!"))
-                else:
-                    root.after(0, lambda: output_text.insert(tk.END, f"\n❌ ERROR (code {code})"))
-                break
+                root.after(0, replace_line)
+                buffer_line = ""
+            elif ch == "\n":
+                def append_line(line=buffer_line):
+                    output_text.insert(tk.END, line + "\n")
+                    output_text.see(tk.END)
+                root.after(0, append_line)
+                buffer_line = ""
+            else:
+                buffer_line += ch
 
     threading.Thread(target=read_output, daemon=True).start()
 
