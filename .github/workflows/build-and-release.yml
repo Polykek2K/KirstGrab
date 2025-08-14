@@ -38,7 +38,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller -F main.py --distpath dist --workpath build --noconfirm --add-data 'images/background.png;images' --add-data 'images/button_normal.png;images' --add-data 'images/button_pressed.png;images' --add-data 'fonts/m6x11plus.ttf;fonts' --add-data 'ico.ico;.' --add-binary 'yt-dlp.exe;bin' --add-binary 'ffmpeg\ffmpeg.exe;bin'
+          pyinstaller -F KirstGrab.py --distpath dist --workpath build --noconfirm --add-data 'images/background.png;images' --add-data 'images/button_normal.png;images' --add-data 'images/button_pressed.png;images' --add-data 'fonts/m6x11plus.ttf;fonts' --add-data 'ico.ico;.' --add-binary 'yt-dlp.exe;bin' --add-binary 'ffmpeg\ffmpeg.exe;bin'
 
       - name: Create archive
         run: |
