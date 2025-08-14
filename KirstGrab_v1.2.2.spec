@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['KirstGrab_v1.2.2.py'],
+    ['KirstGrab.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='KirstGrab_v1.2.2',
+    name='KirstGrab',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

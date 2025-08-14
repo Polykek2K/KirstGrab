@@ -1,0 +1,55 @@
+name: Build and release Windows exe
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+
+      - name: Download latest yt-dlp.exe
+        run: |
+          $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest' -Headers @{Accept='application/vnd.github+json'}
+          $asset = $rel.assets | Where-Object { $_.name -like '*yt-dlp.exe' } | Select-Object -First 1
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'yt-dlp.exe'
+
+      - name: Download latest ffmpeg (BtbN builds)
+        run: |
+          $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers @{Accept='application/vnd.github+json'}
+          $asset = $rel.assets | Where-Object { $_.name -match 'win64' -and $_.name -match '\.zip$' } | Select-Object -First 1
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'ffmpeg.zip'
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg
+          $ff = Get-ChildItem -Path ffmpeg -Filter ffmpeg.exe -Recurse | Select-Object -First 1
+          Copy-Item $ff.FullName -Destination .\ffmpeg\ffmpeg.exe
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller -F main.py --distpath dist --workpath build --noconfirm --add-data 'images/background.png;images' --add-data 'images/button_normal.png;images' --add-data 'images/button_pressed.png;images' --add-data 'fonts/m6x11plus.ttf;fonts' --add-data 'ico.ico;.' --add-binary 'yt-dlp.exe;bin' --add-binary 'ffmpeg\ffmpeg.exe;bin'
+
+      - name: Create archive
+        run: |
+          $exe = Get-ChildItem -Path dist -Filter *.exe -Recurse | Select-Object -First 1
+          Compress-Archive -Path $exe.FullName -DestinationPath release.zip -Force
+
+      - name: Create GitHub Release and upload archive
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ github.run_number }}-${{ github.sha }}
+          name: Release ${{ github.run_number }}-${{ github.sha }}
+          files: release.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
