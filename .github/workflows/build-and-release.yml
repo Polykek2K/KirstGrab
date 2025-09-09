@@ -41,6 +41,11 @@ jobs:
           $ff = Get-ChildItem -Path ffmpeg_tmp -Filter ffmpeg.exe -Recurse | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path .\ffmpeg | Out-Null
           Copy-Item $ff.FullName -Destination .\ffmpeg\ffmpeg.exe -Force
+          # Copy all required DLL files
+          $dlls = Get-ChildItem -Path ffmpeg_tmp -Filter "*.dll" -Recurse
+          foreach ($dll in $dlls) {
+            Copy-Item $dll.FullName -Destination .\ffmpeg\ -Force
+          }
 
       - name: Build EXE with PyInstaller (embed resources/binaries)
         run: |
@@ -49,7 +54,8 @@ jobs:
             --add-data 'fonts/m6x11plus.ttf;fonts' `
             --add-data 'icon.ico;.' `
             --add-binary 'yt-dlp.exe;bin' `
-            --add-binary 'ffmpeg\ffmpeg.exe;bin'
+            --add-binary 'ffmpeg\ffmpeg.exe;bin' `
+            --add-binary 'ffmpeg\*.dll;bin'
 
       - name: Prepare archive
         run: |

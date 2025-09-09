@@ -4,8 +4,13 @@ import ctypes
 import threading
 import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, font as tkfont
-from PIL import Image, ImageTk, ImageFont
+from tkinter import filedialog, messagebox, font as tkfont
+
+try:
+    from PIL import Image, ImageTk, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 def resource_path(relative_path):
     try:
@@ -56,12 +61,20 @@ def build_command(url, download_path, format_choice, cookies_path):
         cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
     if os.path.exists(ffmpeg_path):
         cmd.extend(["--ffmpeg-location", os.path.dirname(ffmpeg_path)])
+        # Debug: Add ffmpeg path to output
+        output_text.insert(tk.END, f"Using ffmpeg: {ffmpeg_path}\n")
+    else:
+        output_text.insert(tk.END, f"Warning: ffmpeg not found at {ffmpeg_path}\n")
     return cmd
 
 def start_download(url, download_path, format_choice):
     cookies_path = os.path.abspath("cookies.txt")
     ensure_cookies_file(cookies_path)
     cmd = build_command(url, download_path, format_choice, cookies_path)
+    
+    # Debug: Show the command being executed
+    output_text.insert(tk.END, f"Command: {' '.join(cmd)}\n")
+    
     try:
         proc = subprocess.Popen(
             cmd,
@@ -80,6 +93,8 @@ def start_download(url, download_path, format_choice):
 
     def read_output():
         buffer_line = ""
+        progress_line_created = [False]  # Track if progress line exists
+        
         while True:
             try:
                 ch = proc.stdout.read(1)
@@ -96,14 +111,23 @@ def start_download(url, download_path, format_choice):
             if ch == "\r":
                 # перезаписываем последнюю строку (для прогресса)
                 def replace_line(line=buffer_line):
-                    output_text.delete("end-2l", "end-1l")
-                    output_text.insert("end-1l", line)
+                    if progress_line_created[0]:
+                        # Удаляем последнюю строку и заменяем её
+                        last_line = output_text.index(tk.END + "-1l")
+                        output_text.delete(last_line, tk.END)
+                        output_text.insert(tk.END, line)
+                    else:
+                        # Создаем новую строку прогресса
+                        output_text.insert(tk.END, line)
+                        progress_line_created[0] = True
                     output_text.see(tk.END)
                 root.after(0, replace_line)
                 buffer_line = ""
             elif ch == "\n":
                 def append_line(line=buffer_line):
                     output_text.insert(tk.END, line + "\n")
+                    # Сбрасываем флаг строки прогресса при добавлении новой строки
+                    progress_line_created[0] = False
                     output_text.see(tk.END)
                 root.after(0, append_line)
                 buffer_line = ""
@@ -136,7 +160,7 @@ root.config(bg=default_bg)
 
 tk_custom_font = ("Arial", 12)
 font_file = resource_path(os.path.join("fonts", "m6x11plus.ttf"))
-if os.path.exists(font_file):
+if os.path.exists(font_file) and PIL_AVAILABLE:
     try:
         pil_font = ImageFont.truetype(font_file, size=12)
         family_name = pil_font.getname()[0]
@@ -156,7 +180,7 @@ if os.path.exists(font_file):
 bg_photo = None
 frame_bg = default_bg
 bg_path = resource_path(os.path.join("images", "background.png"))
-if os.path.exists(bg_path):
+if os.path.exists(bg_path) and PIL_AVAILABLE:
     try:
         bg_image = Image.open(bg_path)
         bg_photo = ImageTk.PhotoImage(bg_image)
@@ -189,7 +213,7 @@ btn_normal = None
 btn_pressed = None
 btn_normal_path = resource_path(os.path.join("images", "button_normal.png"))
 btn_pressed_path = resource_path(os.path.join("images", "button_pressed.png"))
-if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path):
+if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path) and PIL_AVAILABLE:
     try:
         btn_normal = ImageTk.PhotoImage(file=btn_normal_path)
         btn_pressed = ImageTk.PhotoImage(file=btn_pressed_path)
