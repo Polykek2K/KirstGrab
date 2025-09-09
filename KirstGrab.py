@@ -12,6 +12,16 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+# Windows API constants for clipboard access
+if sys.platform.startswith("win"):
+    try:
+        import win32clipboard
+        WIN32_AVAILABLE = True
+    except ImportError:
+        WIN32_AVAILABLE = False
+else:
+    WIN32_AVAILABLE = False
+
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -251,8 +261,139 @@ format_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custo
 format_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
 format_menu.pack(side=tk.LEFT)
 
-entry = tk.Entry(root, width=60, font=tk_custom_font, bd=2, relief="flat")
-entry.pack(pady=5)
+# Create entry frame with paste button
+entry_frame = tk.Frame(root, bg=default_bg)
+entry_frame.pack(pady=5)
+
+entry = tk.Entry(entry_frame, width=55, font=tk_custom_font, bd=2, relief="flat")
+entry.pack(side=tk.LEFT, padx=(0, 5))
+
+# Add a paste button as backup
+paste_button = tk.Button(entry_frame, text="📋 Paste", command=lambda: handle_paste(None), 
+                        font=tk_custom_font, bg="#3498db", fg="white", 
+                        activebackground="#2980b9", bd=0, padx=10)
+paste_button.pack(side=tk.LEFT)
+
+# Add help text
+help_label = tk.Label(root, text="💡 Tip: Right-click in the URL field for paste options", 
+                     font=("Arial", 9), fg="#bdc3c7", bg=default_bg)
+help_label.pack(pady=(0, 5))
+
+# Add keyboard shortcuts for better compatibility with non-English layouts
+def handle_paste(event):
+    """Handle paste operation with better keyboard layout support"""
+    clipboard_content = None
+    
+    # Try Windows API first (more reliable)
+    if WIN32_AVAILABLE:
+        try:
+            win32clipboard.OpenClipboard()
+            clipboard_content = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+            win32clipboard.CloseClipboard()
+        except Exception:
+            pass
+    
+    # Fallback to Tkinter clipboard
+    if not clipboard_content:
+        try:
+            clipboard_content = root.clipboard_get()
+        except tk.TclError:
+            pass
+    
+    if clipboard_content:
+        # Clear current selection and insert clipboard content
+        entry.delete(0, tk.END)
+        entry.insert(0, clipboard_content)
+        return "break"  # Prevent default behavior
+    
+    return None
+
+def handle_ctrl_v(event):
+    """Handle Ctrl+V specifically"""
+    return handle_paste(event)
+
+def handle_enter(event):
+    """Handle Enter key to start download"""
+    on_download_clicked()
+    return "break"
+
+def handle_escape(event):
+    """Handle Escape key to clear entry"""
+    entry.delete(0, tk.END)
+    return "break"
+
+def handle_ctrl_a(event):
+    """Handle Ctrl+A to select all"""
+    entry.select_range(0, tk.END)
+    return "break"
+
+# Add context menu for better paste support
+def show_context_menu(event):
+    """Show context menu with paste option"""
+    try:
+        context_menu = tk.Menu(root, tearoff=0, bg="#2c3e50", fg="white", font=tk_custom_font,
+                              activebackground="#3498db", activeforeground="white")
+        context_menu.add_command(label="📋 Paste (Ctrl+V)", command=lambda: handle_paste(None))
+        context_menu.add_separator()
+        context_menu.add_command(label="✂️ Cut", command=lambda: entry.event_generate("<<Cut>>"))
+        context_menu.add_command(label="📄 Copy", command=lambda: entry.event_generate("<<Copy>>"))
+        context_menu.add_separator()
+        context_menu.add_command(label="🔍 Select All (Ctrl+A)", command=lambda: handle_ctrl_a(None))
+        context_menu.add_command(label="🗑️ Clear", command=lambda: entry.delete(0, tk.END))
+        
+        # Show context menu at cursor position
+        context_menu.tk_popup(event.x_root, event.y_root)
+    except Exception:
+        pass
+
+# Bind keyboard events - multiple approaches for different layouts
+def handle_key_press(event):
+    """Handle key press events for better layout compatibility"""
+    # Debug: Print key information (remove in production)
+    # print(f"Key: {event.keysym}, State: {event.state}, Char: {event.char}")
+    
+    # Check for Ctrl+V using multiple methods
+    if (event.state & 0x4 and  # Ctrl is pressed
+        (event.keysym.lower() == 'v' or  # V key
+         event.char == '\x16' or  # Ctrl+V character code
+         event.keycode == 86)):  # V key code
+        return handle_paste(event)
+    
+    # Check for Ctrl+A using multiple methods
+    elif (event.state & 0x4 and  # Ctrl is pressed
+          (event.keysym.lower() == 'a' or  # A key
+           event.char == '\x01' or  # Ctrl+A character code
+           event.keycode == 65)):  # A key code
+        return handle_ctrl_a(event)
+    
+    # Check for Enter
+    elif event.keysym in ['Return', 'KP_Enter']:
+        return handle_enter(event)
+    
+    # Check for Escape
+    elif event.keysym == 'Escape':
+        return handle_escape(event)
+    
+    return None
+
+# Bind events using multiple methods for maximum compatibility
+entry.bind("<KeyPress>", handle_key_press)  # Main key handler
+entry.bind("<Control-v>", handle_ctrl_v)    # Standard Ctrl+V
+entry.bind("<Control-V>", handle_ctrl_v)    # Capital V
+entry.bind("<Control-a>", handle_ctrl_a)    # Standard Ctrl+A
+entry.bind("<Control-A>", handle_ctrl_a)    # Capital A
+entry.bind("<Escape>", handle_escape)       # Escape to clear
+entry.bind("<Button-2>", show_context_menu)    # Middle mouse button context menu
+entry.bind("<Button-3>", show_context_menu)    # Right mouse button context menu
+entry.bind("<Return>", handle_enter)        # Enter key to download
+entry.bind("<KP_Enter>", handle_enter)      # Numpad Enter
+
+# Additional bindings for Russian layout compatibility
+entry.bind("<Control-KeyPress>", handle_key_press)  # Ctrl+Key combinations
+entry.bind("<Key>", handle_key_press)               # All key events
+
+# Focus the entry widget by default
+entry.focus_set()
 
 output_text = tk.Text(root, height=12, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font)
 output_text.pack(pady=5)
