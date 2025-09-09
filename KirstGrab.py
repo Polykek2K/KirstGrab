@@ -51,14 +51,37 @@ def build_command(url, download_path, format_choice, cookies_path):
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     cmd = [
         yt,
-        "-f", "bv*+ba/b" if format_choice == "Video+Audio (MP4)" else "ba",
         "--cookies", cookies_path,
+        "--no-check-certificates",  # Skip SSL certificate verification
+        "--prefer-free-formats",    # Prefer free formats when available
+        "--merge-output-format", "mp4",  # Merge to MP4 when possible
         url,
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
-    if format_choice == "Audio only (MP3)":
-        cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", "0"])
+    
+    # Set format based on choice
+    if format_choice == "Best Quality (MP4)":
+        # Download best video+audio, prefer MP4, fallback to best available
+        cmd.extend(["-f", "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"])
+    elif format_choice == "Best Quality (Any Format)":
+        # Download best available quality in any format
+        cmd.extend(["-f", "bestvideo+bestaudio/best"])
+    elif format_choice == "1080p (MP4)":
+        # Download 1080p video, fallback to best available
+        cmd.extend(["-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best"])
+    elif format_choice == "720p (MP4)":
+        # Download 720p video, fallback to best available
+        cmd.extend(["-f", "best[height<=720][ext=mp4]/bestvideo[height<=720]+bestaudio[ext=m4a]/best[height<=720]/best"])
+    elif format_choice == "480p (MP4)":
+        # Download 480p video, fallback to best available
+        cmd.extend(["-f", "best[height<=480][ext=mp4]/bestvideo[height<=480]+bestaudio[ext=m4a]/best[height<=480]/best"])
+    elif format_choice == "Audio only (MP3)":
+        # Download best audio and convert to MP3
+        cmd.extend(["-f", "bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "0"])
+    else:
+        # Fallback to best available
+        cmd.extend(["-f", "best"])
     if os.path.exists(ffmpeg_path):
         cmd.extend(["--ffmpeg-location", os.path.dirname(ffmpeg_path)])
         # Debug: Add ffmpeg path to output
@@ -73,6 +96,7 @@ def start_download(url, download_path, format_choice):
     cmd = build_command(url, download_path, format_choice, cookies_path)
     
     # Debug: Show the command being executed
+    output_text.insert(tk.END, f"Format: {format_choice}\n")
     output_text.insert(tk.END, f"Command: {' '.join(cmd)}\n")
     
     try:
@@ -148,12 +172,18 @@ def on_download_clicked():
 
 root = tk.Tk()
 root.title("KirstGrab")
+
+# Set icon before configuring the window
 ico_p = resource_path("icon.ico")
 if os.path.exists(ico_p):
     try:
         root.iconbitmap(ico_p)
     except Exception:
-        pass
+        # Try alternative method
+        try:
+            root.tk.call('wm', 'iconbitmap', root._w, ico_p)
+        except Exception:
+            pass
 root.geometry("500x350")
 default_bg = "#2c3e50"
 root.config(bg=default_bg)
@@ -194,11 +224,20 @@ if os.path.exists(bg_path) and PIL_AVAILABLE:
 settings_frame = tk.Frame(root, bg=frame_bg if frame_bg else default_bg, bd=0)
 settings_frame.pack(pady=5)
 
-format_var = tk.StringVar(value="Video+Audio (MP4)")
+format_var = tk.StringVar(value="Best Quality (MP4)")
 format_label = tk.Label(settings_frame, text="Format:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
 format_label.pack(side=tk.LEFT, padx=5)
 
-format_menu = tk.OptionMenu(settings_frame, format_var, "Video+Audio (MP4)", "Audio only (MP3)")
+format_options = [
+    "Best Quality (MP4)",
+    "Best Quality (Any Format)", 
+    "1080p (MP4)",
+    "720p (MP4)",
+    "480p (MP4)",
+    "Audio only (MP3)"
+]
+
+format_menu = tk.OptionMenu(settings_frame, format_var, *format_options)
 format_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custom_font)
 format_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
 format_menu.pack(side=tk.LEFT)
