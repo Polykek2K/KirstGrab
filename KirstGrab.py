@@ -49,6 +49,9 @@ class ImageButton(tk.Canvas):
 def build_command(url, download_path, format_choice, cookies_path):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
+    ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
+    ffmpeg_dir = os.path.dirname(ffmpeg_path)
+    
     cmd = [
         yt,
         "--cookies", cookies_path,
@@ -82,12 +85,18 @@ def build_command(url, download_path, format_choice, cookies_path):
     else:
         # Fallback to best available
         cmd.extend(["-f", "best"])
-    if os.path.exists(ffmpeg_path):
-        cmd.extend(["--ffmpeg-location", os.path.dirname(ffmpeg_path)])
+    
+    # Check for ffmpeg and ffprobe
+    if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
+        cmd.extend(["--ffmpeg-location", ffmpeg_dir])
         # Debug: Add ffmpeg path to output
         output_text.insert(tk.END, f"Using ffmpeg: {ffmpeg_path}\n")
+        output_text.insert(tk.END, f"Using ffprobe: {ffprobe_path}\n")
     else:
-        output_text.insert(tk.END, f"Warning: ffmpeg not found at {ffmpeg_path}\n")
+        if not os.path.exists(ffmpeg_path):
+            output_text.insert(tk.END, f"Warning: ffmpeg not found at {ffmpeg_path}\n")
+        if not os.path.exists(ffprobe_path):
+            output_text.insert(tk.END, f"Warning: ffprobe not found at {ffprobe_path}\n")
     return cmd
 
 def start_download(url, download_path, format_choice):

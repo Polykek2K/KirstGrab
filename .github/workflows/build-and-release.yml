@@ -39,8 +39,10 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'ffmpeg.zip'
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp
           $ff = Get-ChildItem -Path ffmpeg_tmp -Filter ffmpeg.exe -Recurse | Select-Object -First 1
+          $ffp = Get-ChildItem -Path ffmpeg_tmp -Filter ffprobe.exe -Recurse | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path .\ffmpeg | Out-Null
           Copy-Item $ff.FullName -Destination .\ffmpeg\ffmpeg.exe -Force
+          Copy-Item $ffp.FullName -Destination .\ffmpeg\ffprobe.exe -Force
           # Copy all required DLL files
           $dlls = Get-ChildItem -Path ffmpeg_tmp -Filter "*.dll" -Recurse
           foreach ($dll in $dlls) {
@@ -55,6 +57,7 @@ jobs:
             --add-data 'icon.ico;.' `
             --add-binary 'yt-dlp.exe;bin' `
             --add-binary 'ffmpeg\ffmpeg.exe;bin' `
+            --add-binary 'ffmpeg\ffprobe.exe;bin' `
             --add-binary 'ffmpeg\*.dll;bin'
 
       - name: Prepare archive
