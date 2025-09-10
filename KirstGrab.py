@@ -33,6 +33,43 @@ def ensure_cookies_file(path):
     if not os.path.exists(path):
         open(path, "w", encoding="utf-8").close()
 
+def clear_cookies_file():
+    """Clear the cookies.txt file on startup"""
+    cookies_path = resource_path("cookies.txt")
+    try:
+        with open(cookies_path, "w", encoding="utf-8") as f:
+            f.write("")  # Clear the file
+    except Exception as e:
+        print(f"Warning: Could not clear cookies file: {e}")
+
+def edit_cookies_file():
+    """Open cookies.txt file in notepad for editing"""
+    cookies_path = resource_path("cookies.txt")
+    ensure_cookies_file(cookies_path)
+    
+    try:
+        if sys.platform.startswith("win"):
+            os.system(f'notepad.exe "{cookies_path}"')
+        elif sys.platform.startswith("darwin"):  # macOS
+            os.system(f'open -e "{cookies_path}"')
+        else:  # Linux
+            os.system(f'xdg-open "{cookies_path}"')
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not open cookies file: {e}")
+
+def get_available_browsers():
+    """Get list of available browsers for yt-dlp"""
+    return [
+        "cookies.txt (file)",
+        "chrome",
+        "chromium", 
+        "edge",
+        "firefox",
+        "opera",
+        "safari",
+        "vivaldi"
+    ]
+
 def find_embedded_exe(name):
     p = resource_path(os.path.join("bin", name))
     return p if os.path.exists(p) else name
@@ -56,7 +93,7 @@ class ImageButton(tk.Canvas):
         if self.command and 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
             self.command()
 
-def build_command(url, download_path, format_choice, cookies_path):
+def build_command(url, download_path, format_choice, cookies_source):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
@@ -64,7 +101,6 @@ def build_command(url, download_path, format_choice, cookies_path):
     
     cmd = [
         yt,
-        "--cookies", cookies_path,
         "--no-check-certificates",  # Skip SSL certificate verification
         "--prefer-free-formats",    # Prefer free formats when available
         "--merge-output-format", "mp4",  # Merge to MP4 when possible
@@ -72,6 +108,15 @@ def build_command(url, download_path, format_choice, cookies_path):
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
+    
+    # Handle cookies source
+    if cookies_source == "cookies.txt (file)":
+        cookies_path = resource_path("cookies.txt")
+        ensure_cookies_file(cookies_path)
+        cmd.extend(["--cookies", cookies_path])
+    else:
+        # Use browser cookies
+        cmd.extend(["--cookies-from-browser", cookies_source])
     
     # Set format based on choice
     if format_choice == "Best Quality (MP4)":
@@ -109,13 +154,12 @@ def build_command(url, download_path, format_choice, cookies_path):
             output_text.insert(tk.END, f"Warning: ffprobe not found at {ffprobe_path}\n")
     return cmd
 
-def start_download(url, download_path, format_choice):
-    cookies_path = os.path.abspath("cookies.txt")
-    ensure_cookies_file(cookies_path)
-    cmd = build_command(url, download_path, format_choice, cookies_path)
+def start_download(url, download_path, format_choice, cookies_source):
+    cmd = build_command(url, download_path, format_choice, cookies_source)
     
     # Debug: Show the command being executed
     output_text.insert(tk.END, f"Format: {format_choice}\n")
+    output_text.insert(tk.END, f"Cookies: {cookies_source}\n")
     output_text.insert(tk.END, f"Command: {' '.join(cmd)}\n")
     
     try:
@@ -187,7 +231,7 @@ def on_download_clicked():
     download_path = filedialog.askdirectory()
     if not download_path:
         return
-    start_download(url, download_path, format_var.get())
+    start_download(url, download_path, format_var.get(), cookies_var.get())
 
 root = tk.Tk()
 root.title("KirstGrab")
@@ -206,6 +250,9 @@ if os.path.exists(ico_p):
 root.geometry("500x350")
 default_bg = "#2c3e50"
 root.config(bg=default_bg)
+
+# Clear cookies file on startup
+clear_cookies_file()
 
 tk_custom_font = ("Arial", 12)
 font_file = resource_path(os.path.join("fonts", "m6x11plus.ttf"))
@@ -260,6 +307,33 @@ format_menu = tk.OptionMenu(settings_frame, format_var, *format_options)
 format_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custom_font)
 format_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
 format_menu.pack(side=tk.LEFT)
+
+# Add cookies management
+cookies_var = tk.StringVar(value="cookies.txt (file)")
+cookies_label = tk.Label(settings_frame, text="Cookies:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
+cookies_label.pack(side=tk.LEFT, padx=(20, 5))
+
+cookies_menu = tk.OptionMenu(settings_frame, cookies_var, *get_available_browsers())
+cookies_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custom_font)
+cookies_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
+cookies_menu.pack(side=tk.LEFT)
+
+# Add edit cookies button
+edit_cookies_btn = tk.Button(settings_frame, text="📝 Edit Cookies", command=edit_cookies_file,
+                            font=tk_custom_font, bg="#e67e22", fg="white", 
+                            activebackground="#d35400", bd=0, padx=8)
+edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+# Function to toggle edit cookies button visibility
+def toggle_edit_cookies_button(*args):
+    """Show/hide edit cookies button based on cookies source selection"""
+    if cookies_var.get() == "cookies.txt (file)":
+        edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+    else:
+        edit_cookies_btn.pack_forget()
+
+# Bind the toggle function to cookies selection
+cookies_var.trace('w', toggle_edit_cookies_button)
 
 # Create entry frame with paste button
 entry_frame = tk.Frame(root, bg=default_bg)

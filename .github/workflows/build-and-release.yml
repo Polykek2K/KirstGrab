@@ -55,6 +55,7 @@ jobs:
             --add-data 'images/background.png;images' `
             --add-data 'fonts/m6x11plus.ttf;fonts' `
             --add-data 'icon.ico;.' `
+            --add-data 'cookies.txt;.' `
             --add-binary 'yt-dlp.exe;bin' `
             --add-binary 'ffmpeg\ffmpeg.exe;bin' `
             --add-binary 'ffmpeg\ffprobe.exe;bin' `
