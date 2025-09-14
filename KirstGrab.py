@@ -113,7 +113,9 @@ def build_command(url, download_path, format_choice, cookies_source):
     if cookies_source == "cookies.txt (file)":
         cookies_path = resource_path("cookies.txt")
         ensure_cookies_file(cookies_path)
-        cmd.extend(["--cookies", cookies_path])
+        # Only use cookies if the file is not empty
+        if os.path.getsize(cookies_path) > 0:
+            cmd.extend(["--cookies", cookies_path])
     else:
         # Use browser cookies
         cmd.extend(["--cookies-from-browser", cookies_source])
