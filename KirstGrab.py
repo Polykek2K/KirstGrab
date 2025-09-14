@@ -205,12 +205,20 @@ def start_download(url, download_path, format_choice, cookies_source):
     output_text.config(state=tk.DISABLED)
     
     try:
+        # Create startup info to hide console window on Windows
+        startupinfo = None
+        if sys.platform.startswith("win"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+        
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            startupinfo=startupinfo
         )
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось запустить yt-dlp: {e}")
