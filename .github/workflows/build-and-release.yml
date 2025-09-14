@@ -51,7 +51,7 @@ jobs:
 
       - name: Build EXE with PyInstaller (embed resources/binaries)
         run: |
-          pyinstaller -F KirstGrab.py --distpath dist --workpath build --noconfirm `
+          pyinstaller -F --windowed KirstGrab.py --distpath dist --workpath build --noconfirm `
             --icon 'icon.ico' `
             --add-data 'images/background.png;images' `
             --add-data 'fonts/m6x11plus.ttf;fonts' `

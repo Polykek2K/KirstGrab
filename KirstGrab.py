@@ -57,6 +57,40 @@ def edit_cookies_file():
     except Exception as e:
         messagebox.showerror("Error", f"Could not open cookies file: {e}")
 
+def paste_cookies():
+    """Paste clipboard content to cookies.txt file"""
+    cookies_path = resource_path("cookies.txt")
+    clipboard_content = None
+    
+    # Try Windows API first (more reliable)
+    if WIN32_AVAILABLE:
+        try:
+            win32clipboard.OpenClipboard()
+            clipboard_content = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+            win32clipboard.CloseClipboard()
+            # Convert bytes to string if necessary
+            if isinstance(clipboard_content, bytes):
+                clipboard_content = clipboard_content.decode('utf-8', errors='ignore')
+        except Exception:
+            pass
+    
+    # Fallback to Tkinter clipboard
+    if not clipboard_content:
+        try:
+            clipboard_content = root.clipboard_get()
+        except tk.TclError:
+            pass
+    
+    if clipboard_content:
+        try:
+            with open(cookies_path, "w", encoding="utf-8") as f:
+                f.write(clipboard_content)
+            messagebox.showinfo("Success", "Cookies pasted successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not write cookies file: {e}")
+    else:
+        messagebox.showwarning("Warning", "No content found in clipboard!")
+
 def get_available_browsers():
     """Get list of available browsers for yt-dlp"""
     return [
@@ -147,22 +181,28 @@ def build_command(url, download_path, format_choice, cookies_source):
     if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
         cmd.extend(["--ffmpeg-location", ffmpeg_dir])
         # Debug: Add ffmpeg path to output
+        output_text.config(state=tk.NORMAL)
         output_text.insert(tk.END, f"Using ffmpeg: {ffmpeg_path}\n")
         output_text.insert(tk.END, f"Using ffprobe: {ffprobe_path}\n")
+        output_text.config(state=tk.DISABLED)
     else:
+        output_text.config(state=tk.NORMAL)
         if not os.path.exists(ffmpeg_path):
             output_text.insert(tk.END, f"Warning: ffmpeg not found at {ffmpeg_path}\n")
         if not os.path.exists(ffprobe_path):
             output_text.insert(tk.END, f"Warning: ffprobe not found at {ffprobe_path}\n")
+        output_text.config(state=tk.DISABLED)
     return cmd
 
 def start_download(url, download_path, format_choice, cookies_source):
     cmd = build_command(url, download_path, format_choice, cookies_source)
     
     # Debug: Show the command being executed
+    output_text.config(state=tk.NORMAL)
     output_text.insert(tk.END, f"Format: {format_choice}\n")
     output_text.insert(tk.END, f"Cookies: {cookies_source}\n")
     output_text.insert(tk.END, f"Command: {' '.join(cmd)}\n")
+    output_text.config(state=tk.DISABLED)
     
     try:
         proc = subprocess.Popen(
@@ -174,11 +214,15 @@ def start_download(url, download_path, format_choice, cookies_source):
         )
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось запустить yt-dlp: {e}")
+        output_text.config(state=tk.NORMAL)
         output_text.insert(tk.END, "\n❌ Ошибка: " + str(e))
+        output_text.config(state=tk.DISABLED)
         return
 
+    output_text.config(state=tk.NORMAL)
     output_text.delete(1.0, tk.END)
     output_text.insert(tk.END, f"Загрузка: {url}\n")
+    output_text.config(state=tk.DISABLED)
 
     def read_output():
         buffer_line = ""
@@ -192,14 +236,18 @@ def start_download(url, download_path, format_choice, cookies_source):
             if not ch:
                 if proc.poll() is not None:
                     code = proc.returncode
-                    root.after(0, lambda: output_text.insert(tk.END,
-                        "\n✅ COMPLETED!" if code == 0 else f"\n❌ ERROR (code {code})"))
+                    def show_completion():
+                        output_text.config(state=tk.NORMAL)
+                        output_text.insert(tk.END, "\n✅ COMPLETED!" if code == 0 else f"\n❌ ERROR (code {code})")
+                        output_text.config(state=tk.DISABLED)
+                    root.after(0, show_completion)
                     break
                 continue
 
             if ch == "\r":
                 # перезаписываем последнюю строку (для прогресса)
                 def replace_line(line=buffer_line):
+                    output_text.config(state=tk.NORMAL)
                     if progress_line_created[0]:
                         # Удаляем последнюю строку и заменяем её
                         last_line = output_text.index(tk.END + "-1l")
@@ -210,14 +258,17 @@ def start_download(url, download_path, format_choice, cookies_source):
                         output_text.insert(tk.END, line)
                         progress_line_created[0] = True
                     output_text.see(tk.END)
+                    output_text.config(state=tk.DISABLED)
                 root.after(0, replace_line)
                 buffer_line = ""
             elif ch == "\n":
                 def append_line(line=buffer_line):
+                    output_text.config(state=tk.NORMAL)
                     output_text.insert(tk.END, line + "\n")
                     # Сбрасываем флаг строки прогресса при добавлении новой строки
                     progress_line_created[0] = False
                     output_text.see(tk.END)
+                    output_text.config(state=tk.DISABLED)
                 root.after(0, append_line)
                 buffer_line = ""
             else:
@@ -249,7 +300,11 @@ if os.path.exists(ico_p):
             root.tk.call('wm', 'iconbitmap', root._w, ico_p)
         except Exception:
             pass
-root.geometry("500x350")
+# Increase GUI size by 25%
+default_width = int(500 * 1.25)  # 625
+default_height = int(350 * 1.25)  # 437
+root.geometry(f"{default_width}x{default_height}")
+root.resizable(False, False)  # Disable window resizing
 default_bg = "#2c3e50"
 root.config(bg=default_bg)
 
@@ -281,7 +336,9 @@ bg_path = resource_path(os.path.join("images", "background.png"))
 if os.path.exists(bg_path) and PIL_AVAILABLE:
     try:
         bg_image = Image.open(bg_path)
-        bg_photo = ImageTk.PhotoImage(bg_image)
+        # Resize background to match the increased window size (25% larger)
+        resized_bg = bg_image.resize((default_width, default_height), Image.Resampling.LANCZOS)
+        bg_photo = ImageTk.PhotoImage(resized_bg)
         bg_label = tk.Label(root, image=bg_photo)
         bg_label.image = bg_photo
         bg_label.place(x=0, y=0, relwidth=1, relheight=1)
@@ -326,13 +383,21 @@ edit_cookies_btn = tk.Button(settings_frame, text="📝 Edit Cookies", command=e
                             activebackground="#d35400", bd=0, padx=8)
 edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
 
+# Add paste cookies button
+paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command=paste_cookies,
+                             font=tk_custom_font, bg="#9b59b6", fg="white", 
+                             activebackground="#8e44ad", bd=0, padx=8)
+paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+
 # Function to toggle edit cookies button visibility
 def toggle_edit_cookies_button(*args):
     """Show/hide edit cookies button based on cookies source selection"""
     if cookies_var.get() == "cookies.txt (file)":
         edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+        paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
     else:
         edit_cookies_btn.pack_forget()
+        paste_cookies_btn.pack_forget()
 
 # Bind the toggle function to cookies selection
 cookies_var.trace('w', toggle_edit_cookies_button)
@@ -471,7 +536,7 @@ entry.bind("<Key>", handle_key_press)               # All key events
 # Focus the entry widget by default
 entry.focus_set()
 
-output_text = tk.Text(root, height=12, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font)
+output_text = tk.Text(root, height=12, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font, state=tk.DISABLED)
 output_text.pack(pady=5)
 
 btn_normal = None
@@ -485,10 +550,10 @@ if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path) and PIL_
         button = ImageButton(root, normal_img=btn_normal, pressed_img=btn_pressed, command=on_download_clicked)
         button.pack(pady=12)
     except Exception:
-        button = tk.Button(root, text="Download", font=tk_custom_font, padx=3, pady=3, command=on_download_clicked, height=1, width=7, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
+        button = tk.Button(root, text="Download", font=tk_custom_font, padx=6, pady=6, command=on_download_clicked, height=2, width=14, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
         button.pack(pady=12)
 else:
-    button = tk.Button(root, text="Download", font=tk_custom_font, padx=3, pady=3, command=on_download_clicked, height=1, width=7, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
+    button = tk.Button(root, text="Download", font=tk_custom_font, padx=6, pady=6, command=on_download_clicked, height=2, width=14, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
     button.pack(pady=12)
 
 root.mainloop()
