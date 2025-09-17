@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -165,7 +165,7 @@ def show_update_dialog(latest_info):
     """Show update dialog with latest version information"""
     dialog = tk.Toplevel(root)
     dialog.title("Update Available")
-    dialog.geometry("450x280")
+    dialog.geometry("450x350")
     dialog.resizable(False, False)
     dialog.configure(bg="#2c3e50")
     
