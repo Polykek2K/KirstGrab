@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -201,9 +201,9 @@ def show_update_dialog(latest_info):
                            font=("Arial", 12), fg="#ecf0f1", bg="#2c3e50")
     message_label.pack(pady=20)
     
-    # Progress bar (initially hidden)
+    # Progress bar (initially visible)
     progress_frame = tk.Frame(dialog, bg="#2c3e50")
-    # Don't pack initially - will be shown when download starts
+    progress_frame.pack(pady=10)
     
     progress_label = tk.Label(progress_frame, text="", 
                              font=("Arial", 10), fg="#f39c12", bg="#2c3e50")
@@ -254,9 +254,6 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
     
     def download_and_replace():
         try:
-            # Show progress frame
-            progress_frame.pack(pady=10)
-            
             # Find the ZIP asset (release package)
             assets = latest_info.get('assets', [])
             zip_asset = None
@@ -320,27 +317,68 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
             backup_path = current_exe + ".backup"
             shutil.copy2(current_exe, backup_path)
             
-            # Replace executable
-            shutil.copy2(temp_exe, current_exe)
-            
-            # Clean up temporary files
-            os.remove(temp_zip)
-            shutil.rmtree(extract_dir, ignore_errors=True)
-            
-            progress_label.config(text="Update completed! Restarting application...")
-            dialog.update()
-            
-            # Show restart message
-            messagebox.showinfo("Update Complete", 
-                              "Update completed successfully!\nThe application will now restart.")
-            
-            # Restart the application
-            if getattr(sys, 'frozen', False):
-                # For compiled executable
-                os.execv(current_exe, [current_exe] + sys.argv[1:])
+            # On Windows, we need to use a different approach to replace the running executable
+            if sys.platform.startswith("win"):
+                # Create a batch script to replace the executable after exit
+                batch_script = os.path.join(temp_dir, "update_kirstgrab.bat")
+                with open(batch_script, 'w') as f:
+                    f.write(f'''@echo off
+timeout /t 2 /nobreak >nul
+copy "{temp_exe}" "{current_exe}" >nul
+if exist "{current_exe}" (
+    del "{backup_path}" >nul
+    del "{temp_zip}" >nul
+    rmdir /s /q "{extract_dir}" >nul
+    del "{batch_script}" >nul
+    start "" "{current_exe}"
+) else (
+    echo Update failed! Restoring backup...
+    copy "{backup_path}" "{current_exe}" >nul
+)
+''')
+                
+                # Clean up temporary files (except the batch script)
+                shutil.rmtree(extract_dir, ignore_errors=True)
+                
+                progress_label.config(text="Update completed! Restarting application...")
+                dialog.update()
+                
+                # Show restart message
+                messagebox.showinfo("Update Complete", 
+                                  "Update completed successfully!\nThe application will now restart.")
+                
+                # Execute the batch script and exit
+                subprocess.Popen([batch_script], shell=True)
+                sys.exit(0)
             else:
-                # For script
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+                # For non-Windows systems, try direct replacement
+                try:
+                    shutil.copy2(temp_exe, current_exe)
+                    
+                    # Clean up temporary files
+                    os.remove(temp_zip)
+                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    
+                    progress_label.config(text="Update completed! Restarting application...")
+                    dialog.update()
+                    
+                    # Show restart message
+                    messagebox.showinfo("Update Complete", 
+                                      "Update completed successfully!\nThe application will now restart.")
+                    
+                    # Restart the application
+                    if getattr(sys, 'frozen', False):
+                        # For compiled executable
+                        os.execv(current_exe, [current_exe] + sys.argv[1:])
+                    else:
+                        # For script
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
+                except PermissionError:
+                    # If permission denied, show error and clean up
+                    messagebox.showerror("Update Error", 
+                                       "Permission denied! Please run the application as administrator to update.")
+                    os.remove(temp_zip)
+                    shutil.rmtree(extract_dir, ignore_errors=True)
                 
         except Exception as e:
             messagebox.showerror("Update Error", f"Failed to update: {str(e)}")
