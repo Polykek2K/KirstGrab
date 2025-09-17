@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -330,28 +330,50 @@ echo Terminating any remaining KirstGrab processes...
 taskkill /f /im KirstGrab.exe >nul 2>&1
 
 echo Waiting a bit more...
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
+
+echo Checking files...
+echo Source: {temp_exe}
+echo Destination: {current_exe}
+if not exist "{temp_exe}" (
+    echo ERROR: New executable not found!
+    pause
+    exit /b 1
+)
 
 echo Replacing executable...
-copy "{temp_exe}" "{current_exe}" >nul
+copy /Y "{temp_exe}" "{current_exe}" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Copy failed with error %errorlevel%
+    echo Trying alternative method...
+    move /Y "{temp_exe}" "{current_exe}" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo Move also failed!
+        pause
+        exit /b 1
+    )
+)
+
 if exist "{current_exe}" (
     echo Update successful! Cleaning up...
-    del "{backup_path}" >nul
-    del "{temp_zip}" >nul
-    rmdir /s /q "{extract_dir}" >nul
-    del "{batch_script}" >nul
+    del "{backup_path}" >nul 2>&1
+    del "{temp_zip}" >nul 2>&1
+    rmdir /s /q "{extract_dir}" >nul 2>&1
     echo Starting new version...
     start "" "{current_exe}"
+    timeout /t 2 >nul
+    del "{batch_script}" >nul 2>&1
 ) else (
     echo Update failed! Restoring backup...
-    copy "{backup_path}" "{current_exe}" >nul
+    copy "{backup_path}" "{current_exe}" >nul 2>&1
     echo Restarting old version...
     start "" "{current_exe}"
+    timeout /t 2 >nul
+    del "{batch_script}" >nul 2>&1
 )
 ''')
                 
-                # Clean up temporary files (except the batch script)
-                shutil.rmtree(extract_dir, ignore_errors=True)
+                # Don't clean up extract directory yet - batch script needs the temp_exe file
                 
                 progress_label.config(text="Update completed! Restarting application...")
                 dialog.update()
