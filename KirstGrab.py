@@ -5,6 +5,11 @@ import threading
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, font as tkfont
+import urllib.request
+import urllib.parse
+import json
+import tempfile
+import shutil
 
 try:
     from PIL import Image, ImageTk, ImageFont
@@ -103,6 +108,246 @@ def get_available_browsers():
         "safari",
         "vivaldi"
     ]
+
+# Current version - update this when releasing new versions
+CURRENT_VERSION = "1.3.11"
+GITHUB_REPO = "Polykek2K/KirstGrab"
+
+def get_latest_release_info():
+    """Get latest release information from GitHub API"""
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            return {
+                'tag_name': data.get('tag_name', ''),
+                'name': data.get('name', ''),
+                'body': data.get('body', ''),
+                'html_url': data.get('html_url', ''),
+                'assets': data.get('assets', [])
+            }
+    except Exception as e:
+        print(f"Error checking for updates: {e}")
+        return None
+
+def compare_versions(current, latest):
+    """Compare version strings (simple numeric comparison)"""
+    try:
+        # Remove 'v' prefix if present
+        current = current.replace('v', '')
+        latest = latest.replace('v', '')
+        
+        # Split by dots and convert to integers
+        current_parts = [int(x) for x in current.split('.')]
+        latest_parts = [int(x) for x in latest.split('.')]
+        
+        # Pad shorter version with zeros
+        max_len = max(len(current_parts), len(latest_parts))
+        current_parts.extend([0] * (max_len - len(current_parts)))
+        latest_parts.extend([0] * (max_len - len(latest_parts)))
+        
+        # Compare parts
+        for i in range(max_len):
+            if latest_parts[i] > current_parts[i]:
+                return True  # Latest is newer
+            elif latest_parts[i] < current_parts[i]:
+                return False  # Current is newer
+        
+        return False  # Versions are equal
+    except Exception:
+        return False
+
+def download_file(url, filepath, progress_callback=None):
+    """Download a file with progress callback"""
+    try:
+        def download_progress(block_num, block_size, total_size):
+            if progress_callback and total_size > 0:
+                downloaded = block_num * block_size
+                percent = min(100, (downloaded / total_size) * 100)
+                progress_callback(percent)
+        
+        urllib.request.urlretrieve(url, filepath, reporthook=download_progress)
+        return True
+    except Exception as e:
+        print(f"Error downloading file: {e}")
+        return False
+
+def show_update_dialog(latest_info):
+    """Show update dialog with latest version information"""
+    dialog = tk.Toplevel(root)
+    dialog.title("Update Available")
+    dialog.geometry("450x280")
+    dialog.resizable(False, False)
+    dialog.configure(bg="#2c3e50")
+    
+    # Center the dialog
+    dialog.transient(root)
+    dialog.grab_set()
+    
+    # Make dialog modal
+    dialog.focus_set()
+    
+    # Update info
+    latest_version = latest_info.get('tag_name', 'Unknown')
+    release_name = latest_info.get('name', 'Latest Release')
+    release_notes = latest_info.get('body', 'No release notes available.')
+    
+    # Title
+    title_label = tk.Label(dialog, text=f"🔄 Update Available!", 
+                          font=("Arial", 16, "bold"), 
+                          fg="#3498db", bg="#2c3e50")
+    title_label.pack(pady=20)
+    
+    # Version info
+    version_frame = tk.Frame(dialog, bg="#2c3e50")
+    version_frame.pack(pady=10)
+    
+    tk.Label(version_frame, text=f"Current Version: {CURRENT_VERSION}", 
+             font=("Arial", 12), fg="white", bg="#2c3e50").pack()
+    tk.Label(version_frame, text=f"Latest Version: {latest_version}", 
+             font=("Arial", 12, "bold"), fg="#2ecc71", bg="#2c3e50").pack()
+    
+    # Simple update message
+    message_label = tk.Label(dialog, text="A new version is available for download!", 
+                           font=("Arial", 12), fg="#ecf0f1", bg="#2c3e50")
+    message_label.pack(pady=20)
+    
+    # Progress bar (initially hidden)
+    progress_frame = tk.Frame(dialog, bg="#2c3e50")
+    # Don't pack initially - will be shown when download starts
+    
+    progress_label = tk.Label(progress_frame, text="", 
+                             font=("Arial", 10), fg="#f39c12", bg="#2c3e50")
+    progress_label.pack()
+    
+    progress_bar = tk.Frame(progress_frame, bg="#e74c3c", height=20, width=300)
+    progress_bar.pack(pady=5)
+    
+    # Buttons
+    button_frame = tk.Frame(dialog, bg="#2c3e50")
+    button_frame.pack(pady=20)
+    
+    update_button = tk.Button(button_frame, text="🔄 Update Now", 
+                             font=("Arial", 12, "bold"), 
+                             bg="#e74c3c", fg="white",
+                             activebackground="#c0392b",
+                             bd=0, padx=25, pady=12,
+                             width=12,
+                             command=lambda: start_update(dialog, latest_info, progress_label, progress_bar, progress_frame))
+    update_button.pack(side="left", padx=8)
+    
+    later_button = tk.Button(button_frame, text="⏰ Later", 
+                            font=("Arial", 12), 
+                            bg="#95a5a6", fg="white",
+                            activebackground="#7f8c8d",
+                            bd=0, padx=25, pady=12,
+                            width=8,
+                            command=dialog.destroy)
+    later_button.pack(side="left", padx=8)
+    
+    skip_button = tk.Button(button_frame, text="❌ Skip", 
+                           font=("Arial", 12), 
+                           bg="#95a5a6", fg="white",
+                           activebackground="#7f8c8d",
+                           bd=0, padx=25, pady=12,
+                           width=8,
+                           command=dialog.destroy)
+    skip_button.pack(side="left", padx=8)
+
+def start_update(dialog, latest_info, progress_label, progress_bar, progress_frame):
+    """Start the update process"""
+    def update_progress(percent):
+        progress_label.config(text=f"Downloading update... {percent:.1f}%")
+        # Update progress bar width
+        progress_width = int(300 * (percent / 100))
+        progress_bar.config(width=progress_width)
+        dialog.update()
+    
+    def download_and_replace():
+        try:
+            # Show progress frame
+            progress_frame.pack(pady=10)
+            
+            # Find the executable asset
+            assets = latest_info.get('assets', [])
+            exe_asset = None
+            
+            for asset in assets:
+                if asset['name'].endswith('.exe') and 'KirstGrab' in asset['name']:
+                    exe_asset = asset
+                    break
+            
+            if not exe_asset:
+                messagebox.showerror("Error", "Could not find executable in release assets!")
+                return
+            
+            # Download to temporary file
+            temp_dir = tempfile.gettempdir()
+            temp_exe = os.path.join(temp_dir, f"KirstGrab_update_{exe_asset['name']}")
+            
+            progress_label.config(text="Downloading update...")
+            
+            if not download_file(exe_asset['browser_download_url'], temp_exe, update_progress):
+                messagebox.showerror("Error", "Failed to download update!")
+                return
+            
+            progress_label.config(text="Installing update...")
+            
+            # Get current executable path
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                current_exe = sys.executable
+            else:
+                # Running as script
+                current_exe = os.path.abspath(__file__)
+            
+            # Create backup
+            backup_path = current_exe + ".backup"
+            shutil.copy2(current_exe, backup_path)
+            
+            # Replace executable
+            shutil.copy2(temp_exe, current_exe)
+            
+            # Clean up
+            os.remove(temp_exe)
+            
+            progress_label.config(text="Update completed! Restarting application...")
+            dialog.update()
+            
+            # Show restart message
+            messagebox.showinfo("Update Complete", 
+                              "Update completed successfully!\nThe application will now restart.")
+            
+            # Restart the application
+            if getattr(sys, 'frozen', False):
+                # For compiled executable
+                os.execv(current_exe, [current_exe] + sys.argv[1:])
+            else:
+                # For script
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+                
+        except Exception as e:
+            messagebox.showerror("Update Error", f"Failed to update: {str(e)}")
+            progress_label.config(text="Update failed!")
+    
+    # Start download in separate thread
+    threading.Thread(target=download_and_replace, daemon=True).start()
+
+def check_for_updates():
+    """Check for updates on startup"""
+    def check_thread():
+        try:
+            latest_info = get_latest_release_info()
+            if latest_info:
+                latest_version = latest_info.get('tag_name', '')
+                if compare_versions(CURRENT_VERSION, latest_version):
+                    # Update available - show dialog in main thread
+                    root.after(0, lambda: show_update_dialog(latest_info))
+        except Exception as e:
+            print(f"Update check failed: {e}")
+    
+    # Check for updates in background thread
+    threading.Thread(target=check_thread, daemon=True).start()
 
 def find_embedded_exe(name):
     p = resource_path(os.path.join("bin", name))
@@ -563,5 +808,8 @@ if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path) and PIL_
 else:
     button = tk.Button(root, text="Download", font=tk_custom_font, padx=6, pady=6, command=on_download_clicked, height=2, width=14, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
     button.pack(pady=12)
+
+# Check for updates on startup
+check_for_updates()
 
 root.mainloop()
