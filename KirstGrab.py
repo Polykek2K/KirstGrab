@@ -10,6 +10,7 @@ import urllib.parse
 import json
 import tempfile
 import shutil
+import zipfile
 
 try:
     from PIL import Image, ImageTk, ImageFont
@@ -110,7 +111,7 @@ def get_available_browsers():
     ]
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -268,28 +269,54 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
             # Show progress frame
             progress_frame.pack(pady=10)
             
-            # Find the executable asset
+            # Find the ZIP asset (release package)
             assets = latest_info.get('assets', [])
-            exe_asset = None
+            zip_asset = None
             
             for asset in assets:
-                if asset['name'].endswith('.exe') and 'KirstGrab' in asset['name']:
-                    exe_asset = asset
+                if asset['name'].endswith('.zip') and 'release' in asset['name']:
+                    zip_asset = asset
                     break
             
-            if not exe_asset:
-                messagebox.showerror("Error", "Could not find executable in release assets!")
+            if not zip_asset:
+                messagebox.showerror("Error", "Could not find release package in assets!")
                 return
             
-            # Download to temporary file
+            # Download ZIP to temporary file
             temp_dir = tempfile.gettempdir()
-            temp_exe = os.path.join(temp_dir, f"KirstGrab_update_{exe_asset['name']}")
+            temp_zip = os.path.join(temp_dir, f"KirstGrab_update_{zip_asset['name']}")
             
             progress_label.config(text="Downloading update...")
             
-            if not download_file(exe_asset['browser_download_url'], temp_exe, update_progress):
+            if not download_file(zip_asset['browser_download_url'], temp_zip, update_progress):
                 messagebox.showerror("Error", "Failed to download update!")
                 return
+            
+            progress_label.config(text="Extracting update...")
+            
+            # Extract the ZIP file
+            extract_dir = os.path.join(temp_dir, "KirstGrab_extract")
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            # Find the executable in the extracted files
+            exe_files = []
+            for root, dirs, files in os.walk(extract_dir):
+                for file in files:
+                    if file.endswith('.exe') and 'KirstGrab' in file:
+                        exe_files.append(os.path.join(root, file))
+            
+            if not exe_files:
+                messagebox.showerror("Error", "Could not find executable in release package!")
+                # Clean up
+                os.remove(temp_zip)
+                shutil.rmtree(extract_dir, ignore_errors=True)
+                return
+            
+            # Use the first (and likely only) executable found
+            temp_exe = exe_files[0]
             
             progress_label.config(text="Installing update...")
             
@@ -308,8 +335,9 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
             # Replace executable
             shutil.copy2(temp_exe, current_exe)
             
-            # Clean up
-            os.remove(temp_exe)
+            # Clean up temporary files
+            os.remove(temp_zip)
+            shutil.rmtree(extract_dir, ignore_errors=True)
             
             progress_label.config(text="Update completed! Restarting application...")
             dialog.update()
