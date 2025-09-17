@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -323,57 +323,90 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
                 batch_script = os.path.join(temp_dir, "update_kirstgrab.bat")
                 with open(batch_script, 'w') as f:
                     f.write(f'''@echo off
+setlocal enabledelayedexpansion
+echo KirstGrab Update Script Started
+echo ================================
+
 echo Waiting for KirstGrab to close...
-timeout /t 5 /nobreak >nul
+timeout /t 3 /nobreak
 
 echo Terminating any remaining KirstGrab processes...
-taskkill /f /im KirstGrab.exe >nul 2>&1
+taskkill /f /im KirstGrab.exe 2>nul
+taskkill /f /im python.exe 2>nul
 
-echo Waiting a bit more...
-timeout /t 3 /nobreak >nul
+echo Waiting for processes to terminate...
+timeout /t 2 /nobreak
 
-echo Checking files...
+echo.
+echo File Information:
 echo Source: {temp_exe}
 echo Destination: {current_exe}
+echo Backup: {backup_path}
+echo.
+
 if not exist "{temp_exe}" (
-    echo ERROR: New executable not found!
-    pause
+    echo ERROR: New executable not found at {temp_exe}
+    echo Press any key to exit...
+    pause >nul
     exit /b 1
 )
 
-echo Replacing executable...
-copy /Y "{temp_exe}" "{current_exe}" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Copy failed with error %errorlevel%
-    echo Trying alternative method...
-    move /Y "{temp_exe}" "{current_exe}" >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo Move also failed!
-        pause
+echo Checking if destination is writable...
+if exist "{current_exe}" (
+    echo Destination file exists, checking permissions...
+    echo test > "{current_exe}.test" 2>nul
+    if exist "{current_exe}.test" (
+        del "{current_exe}.test" 2>nul
+        echo Destination is writable.
+    ) else (
+        echo ERROR: Cannot write to destination file!
+        echo Please run as administrator or close any antivirus software.
+        echo Press any key to exit...
+        pause >nul
         exit /b 1
     )
 )
 
-if exist "{current_exe}" (
-    echo Update successful! Cleaning up...
-    del "{backup_path}" >nul 2>&1
-    del "{temp_zip}" >nul 2>&1
-    rmdir /s /q "{extract_dir}" >nul 2>&1
-    echo Starting new version...
-    start "" "{current_exe}"
-    timeout /t 2 >nul
-    del "{batch_script}" >nul 2>&1
-) else (
-    echo Update failed! Restoring backup...
-    copy "{backup_path}" "{current_exe}" >nul 2>&1
-    echo Restarting old version...
-    start "" "{current_exe}"
-    timeout /t 2 >nul
-    del "{batch_script}" >nul 2>&1
+echo Replacing executable...
+copy /Y "{temp_exe}" "{current_exe}"
+if %errorlevel% neq 0 (
+    echo Copy failed! Trying move...
+    move /Y "{temp_exe}" "{current_exe}"
+    if %errorlevel% neq 0 (
+        echo Move also failed!
+        echo This might be due to file permissions or antivirus interference.
+        echo Please try running as administrator.
+        echo Press any key to exit...
+        pause >nul
+        exit /b 1
+    )
 )
+
+echo Verifying update...
+if exist "{current_exe}" (
+    echo Update successful!
+) else (
+    echo ERROR: Update verification failed!
+    echo Press any key to exit...
+    pause >nul
+    exit /b 1
+)
+
+echo.
+echo Cleaning up temporary files...
+del "{backup_path}" 2>nul
+del "{temp_zip}" 2>nul
+rmdir /s /q "{extract_dir}" 2>nul
+
+echo Starting new version...
+start "" "{current_exe}"
+
+echo.
+echo Update completed successfully!
+echo This window will close in 2 seconds...
+timeout /t 2 >nul
+del "{batch_script}" 2>nul
 ''')
-                
-                # Don't clean up extract directory yet - batch script needs the temp_exe file
                 
                 progress_label.config(text="Update completed! Restarting application...")
                 dialog.update()
@@ -383,7 +416,28 @@ if exist "{current_exe}" (
                                   "Update completed successfully!\nThe application will now restart.")
                 
                 # Execute the batch script and exit
-                subprocess.Popen([batch_script], shell=True)
+                print(f"Executing batch script: {batch_script}")
+                print(f"Temp exe: {temp_exe}")
+                print(f"Current exe: {current_exe}")
+                
+                # Try to run the batch script with more visibility
+                try:
+                    # Use subprocess.run with proper error handling
+                    result = subprocess.run([batch_script], 
+                                          shell=True, 
+                                          capture_output=False,
+                                          text=True,
+                                          timeout=60)  # 60 second timeout
+                    print(f"Batch script completed with return code: {result.returncode}")
+                except subprocess.TimeoutExpired:
+                    print("Batch script timed out, but update may have succeeded")
+                except Exception as e:
+                    print(f"Failed to start batch script: {e}")
+                    # Try alternative method
+                    try:
+                        os.startfile(batch_script)
+                    except Exception as e2:
+                        print(f"Alternative start method also failed: {e2}")
                 
                 # Properly close the application
                 try:
@@ -726,6 +780,28 @@ paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command
                              font=tk_custom_font, bg="#9b59b6", fg="white", 
                              activebackground="#8e44ad", bd=0, padx=8)
 paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+# Add manual update check button
+def manual_update_check():
+    """Manually check for updates"""
+    try:
+        latest_info = get_latest_release_info()
+        if latest_info:
+            latest_version = latest_info.get('tag_name', '')
+            if compare_versions(CURRENT_VERSION, latest_version):
+                # Update available - show dialog
+                show_update_dialog(latest_info)
+            else:
+                messagebox.showinfo("No Updates", f"You are running the latest version ({CURRENT_VERSION})!")
+        else:
+            messagebox.showerror("Update Check Failed", "Could not check for updates. Please check your internet connection.")
+    except Exception as e:
+        messagebox.showerror("Update Check Error", f"Error checking for updates: {str(e)}")
+
+update_check_btn = tk.Button(settings_frame, text="🔄 Check Updates", command=manual_update_check,
+                            font=tk_custom_font, bg="#27ae60", fg="white", 
+                            activebackground="#229954", bd=0, padx=8)
+update_check_btn.pack(side=tk.LEFT, padx=(10, 0))
 
 # Create entry frame with paste button
 entry_frame = tk.Frame(root, bg=default_bg)
