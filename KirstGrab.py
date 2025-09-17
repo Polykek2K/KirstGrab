@@ -97,21 +97,9 @@ def paste_cookies():
     else:
         messagebox.showwarning("Warning", "No content found in clipboard!")
 
-def get_available_browsers():
-    """Get list of available browsers for yt-dlp"""
-    return [
-        "cookies.txt (file)",
-        "chrome",
-        "chromium", 
-        "edge",
-        "firefox",
-        "opera",
-        "safari",
-        "vivaldi"
-    ]
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.11"
+CURRENT_VERSION = "1.3.12"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -400,7 +388,7 @@ class ImageButton(tk.Canvas):
         if self.command and 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
             self.command()
 
-def build_command(url, download_path, format_choice, cookies_source):
+def build_command(url, download_path, format_choice):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
@@ -416,16 +404,12 @@ def build_command(url, download_path, format_choice, cookies_source):
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
     
-    # Handle cookies source
-    if cookies_source == "cookies.txt (file)":
-        cookies_path = resource_path("cookies.txt")
-        ensure_cookies_file(cookies_path)
-        # Only use cookies if the file is not empty
-        if os.path.getsize(cookies_path) > 0:
-            cmd.extend(["--cookies", cookies_path])
-    else:
-        # Use browser cookies
-        cmd.extend(["--cookies-from-browser", cookies_source])
+    # Handle cookies - only use cookies.txt file
+    cookies_path = resource_path("cookies.txt")
+    ensure_cookies_file(cookies_path)
+    # Only use cookies if the file is not empty
+    if os.path.getsize(cookies_path) > 0:
+        cmd.extend(["--cookies", cookies_path])
     
     # Set format based on choice
     if format_choice == "Best Quality (MP4)":
@@ -467,13 +451,12 @@ def build_command(url, download_path, format_choice, cookies_source):
         output_text.config(state=tk.DISABLED)
     return cmd
 
-def start_download(url, download_path, format_choice, cookies_source):
-    cmd = build_command(url, download_path, format_choice, cookies_source)
+def start_download(url, download_path, format_choice):
+    cmd = build_command(url, download_path, format_choice)
     
     # Debug: Show the command being executed
     output_text.config(state=tk.NORMAL)
     output_text.insert(tk.END, f"Format: {format_choice}\n")
-    output_text.insert(tk.END, f"Cookies: {cookies_source}\n")
     output_text.insert(tk.END, f"Command: {' '.join(cmd)}\n")
     output_text.config(state=tk.DISABLED)
     
@@ -565,7 +548,7 @@ def on_download_clicked():
     download_path = filedialog.askdirectory()
     if not download_path:
         return
-    start_download(url, download_path, format_var.get(), cookies_var.get())
+    start_download(url, download_path, format_var.get())
 
 root = tk.Tk()
 root.title("KirstGrab")
@@ -649,14 +632,8 @@ format_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
 format_menu.pack(side=tk.LEFT)
 
 # Add cookies management
-cookies_var = tk.StringVar(value="cookies.txt (file)")
 cookies_label = tk.Label(settings_frame, text="Cookies:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
 cookies_label.pack(side=tk.LEFT, padx=(20, 5))
-
-cookies_menu = tk.OptionMenu(settings_frame, cookies_var, *get_available_browsers())
-cookies_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custom_font)
-cookies_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
-cookies_menu.pack(side=tk.LEFT)
 
 # Add edit cookies button
 edit_cookies_btn = tk.Button(settings_frame, text="📝 Edit Cookies", command=edit_cookies_file,
@@ -669,19 +646,6 @@ paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command
                              font=tk_custom_font, bg="#9b59b6", fg="white", 
                              activebackground="#8e44ad", bd=0, padx=8)
 paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-# Function to toggle edit cookies button visibility
-def toggle_edit_cookies_button(*args):
-    """Show/hide edit cookies button based on cookies source selection"""
-    if cookies_var.get() == "cookies.txt (file)":
-        edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
-        paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
-    else:
-        edit_cookies_btn.pack_forget()
-        paste_cookies_btn.pack_forget()
-
-# Bind the toggle function to cookies selection
-cookies_var.trace('w', toggle_edit_cookies_button)
 
 # Create entry frame with paste button
 entry_frame = tk.Frame(root, bg=default_bg)
