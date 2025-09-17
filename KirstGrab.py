@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 def get_latest_release_info():
@@ -323,17 +323,30 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
                 batch_script = os.path.join(temp_dir, "update_kirstgrab.bat")
                 with open(batch_script, 'w') as f:
                     f.write(f'''@echo off
+echo Waiting for KirstGrab to close...
+timeout /t 5 /nobreak >nul
+
+echo Terminating any remaining KirstGrab processes...
+taskkill /f /im KirstGrab.exe >nul 2>&1
+
+echo Waiting a bit more...
 timeout /t 2 /nobreak >nul
+
+echo Replacing executable...
 copy "{temp_exe}" "{current_exe}" >nul
 if exist "{current_exe}" (
+    echo Update successful! Cleaning up...
     del "{backup_path}" >nul
     del "{temp_zip}" >nul
     rmdir /s /q "{extract_dir}" >nul
     del "{batch_script}" >nul
+    echo Starting new version...
     start "" "{current_exe}"
 ) else (
     echo Update failed! Restoring backup...
     copy "{backup_path}" "{current_exe}" >nul
+    echo Restarting old version...
+    start "" "{current_exe}"
 )
 ''')
                 
@@ -349,6 +362,13 @@ if exist "{current_exe}" (
                 
                 # Execute the batch script and exit
                 subprocess.Popen([batch_script], shell=True)
+                
+                # Properly close the application
+                try:
+                    root.quit()
+                    root.destroy()
+                except:
+                    pass
                 sys.exit(0)
             else:
                 # For non-Windows systems, try direct replacement
