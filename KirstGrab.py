@@ -99,8 +99,11 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.12"
+CURRENT_VERSION = "1.3.13"
 GITHUB_REPO = "Polykek2K/KirstGrab"
+
+# Proxy configuration
+DEFAULT_PROXY = "socks5://93.100.160.168:1080"
 
 def get_latest_release_info():
     """Get latest release information from GitHub API"""
@@ -522,7 +525,7 @@ class ImageButton(tk.Canvas):
         if self.command and 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
             self.command()
 
-def build_command(url, download_path, format_choice):
+def build_command(url, download_path, format_choice, use_proxy=False):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
@@ -537,6 +540,10 @@ def build_command(url, download_path, format_choice):
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
+    
+    # Add proxy if enabled
+    if use_proxy:
+        cmd.extend(["--proxy", DEFAULT_PROXY])
     
     # Handle cookies - only use cookies.txt file
     cookies_path = resource_path("cookies.txt")
@@ -586,7 +593,8 @@ def build_command(url, download_path, format_choice):
     return cmd
 
 def start_download(url, download_path, format_choice):
-    cmd = build_command(url, download_path, format_choice)
+    use_proxy = proxy_var.get()
+    cmd = build_command(url, download_path, format_choice, use_proxy)
     
     # Debug: Show the command being executed
     output_text.config(state=tk.NORMAL)
@@ -780,6 +788,14 @@ paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command
                              font=tk_custom_font, bg="#9b59b6", fg="white", 
                              activebackground="#8e44ad", bd=0, padx=8)
 paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+# Add proxy checkbox
+proxy_var = tk.BooleanVar(value=False)
+proxy_checkbox = tk.Checkbutton(settings_frame, text="🌐 Use Proxy", variable=proxy_var,
+                               font=tk_custom_font, bg=frame_bg if frame_bg else default_bg, 
+                               fg="white", selectcolor="#2c3e50", activebackground=frame_bg if frame_bg else default_bg,
+                               activeforeground="white")
+proxy_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
 # Add manual update check button
 def manual_update_check():
