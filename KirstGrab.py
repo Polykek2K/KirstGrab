@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.13"
+CURRENT_VERSION = "1.3.14"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 # Proxy configuration
@@ -706,8 +706,8 @@ if os.path.exists(ico_p):
             root.tk.call('wm', 'iconbitmap', root._w, ico_p)
         except Exception:
             pass
-# Increase GUI size by 25%
-default_width = int(500 * 1.25)  # 625
+# Increase GUI size by 50% to accommodate all controls
+default_width = int(500 * 1.5)  # 750
 default_height = int(350 * 1.25)  # 437
 root.geometry(f"{default_width}x{default_height}")
 root.resizable(False, False)  # Disable window resizing
@@ -742,7 +742,7 @@ bg_path = resource_path(os.path.join("images", "background.png"))
 if os.path.exists(bg_path) and PIL_AVAILABLE:
     try:
         bg_image = Image.open(bg_path)
-        # Resize background to match the increased window size (25% larger)
+        # Resize background to match the increased window size (50% wider)
         resized_bg = bg_image.resize((default_width, default_height), Image.Resampling.LANCZOS)
         bg_photo = ImageTk.PhotoImage(resized_bg)
         bg_label = tk.Label(root, image=bg_photo)
