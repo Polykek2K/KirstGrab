@@ -99,11 +99,9 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.14"
+CURRENT_VERSION = "1.3.15"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
-# Proxy configuration
-DEFAULT_PROXY = "socks5://93.100.160.168:1080"
 
 def get_latest_release_info():
     """Get latest release information from GitHub API"""
@@ -525,7 +523,7 @@ class ImageButton(tk.Canvas):
         if self.command and 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
             self.command()
 
-def build_command(url, download_path, format_choice, use_proxy=False):
+def build_command(url, download_path, format_choice, filename=None):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
@@ -541,9 +539,6 @@ def build_command(url, download_path, format_choice, use_proxy=False):
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
     
-    # Add proxy if enabled
-    if use_proxy:
-        cmd.extend(["--proxy", DEFAULT_PROXY])
     
     # Handle cookies - only use cookies.txt file
     cookies_path = resource_path("cookies.txt")
@@ -551,6 +546,15 @@ def build_command(url, download_path, format_choice, use_proxy=False):
     # Only use cookies if the file is not empty
     if os.path.getsize(cookies_path) > 0:
         cmd.extend(["--cookies", cookies_path])
+    
+    # Handle custom filename if provided and not empty
+    if filename and filename.strip():
+        # Remove extension from filename if present, yt-dlp will add the appropriate extension
+        name_without_ext = os.path.splitext(filename)[0]
+        # Only use custom filename if the name (without extension) is not empty
+        if name_without_ext.strip():
+            output_template = os.path.join(download_path, name_without_ext + ".%(ext)s")
+            cmd.extend(["-o", output_template])
     
     # Set format based on choice
     if format_choice == "Best Quality (MP4)":
@@ -592,9 +596,8 @@ def build_command(url, download_path, format_choice, use_proxy=False):
         output_text.config(state=tk.DISABLED)
     return cmd
 
-def start_download(url, download_path, format_choice):
-    use_proxy = proxy_var.get()
-    cmd = build_command(url, download_path, format_choice, use_proxy)
+def start_download(url, download_path, format_choice, filename=None):
+    cmd = build_command(url, download_path, format_choice, filename)
     
     # Debug: Show the command being executed
     output_text.config(state=tk.NORMAL)
@@ -687,10 +690,32 @@ def on_download_clicked():
     if not url:
         messagebox.showerror("Ошибка", "Введите URL видео!")
         return
-    download_path = filedialog.askdirectory()
-    if not download_path:
+    
+    # Ask user to choose save location and filename
+    # Use a simple default filename since this is YouTube-specific
+    default_filename = "youtube_video.mp4"
+    
+    file_path = filedialog.asksaveasfilename(
+        title="Choose download location and filename (leave blank for auto-naming)",
+        defaultextension=".mp4",
+        initialfile=default_filename,
+        filetypes=[
+            ("MP4 files", "*.mp4"),
+            ("All files", "*.*")
+        ]
+    )
+    if not file_path:
         return
-    start_download(url, download_path, format_var.get())
+    
+    # Extract directory and filename
+    download_path = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    
+    # Only use custom filename if it's not empty, just whitespace, or the default suggested name
+    if not filename or not filename.strip() or filename == default_filename:
+        filename = None
+    
+    start_download(url, download_path, format_var.get(), filename)
 
 root = tk.Tk()
 root.title("KirstGrab")
@@ -789,13 +814,6 @@ paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command
                              activebackground="#8e44ad", bd=0, padx=8)
 paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
 
-# Add proxy checkbox
-proxy_var = tk.BooleanVar(value=False)
-proxy_checkbox = tk.Checkbutton(settings_frame, text="🌐 Use Proxy", variable=proxy_var,
-                               font=tk_custom_font, bg=frame_bg if frame_bg else default_bg, 
-                               fg="white", selectcolor="#2c3e50", activebackground=frame_bg if frame_bg else default_bg,
-                               activeforeground="white")
-proxy_checkbox.pack(side=tk.LEFT, padx=(10, 0))
 
 # Add manual update check button
 def manual_update_check():
