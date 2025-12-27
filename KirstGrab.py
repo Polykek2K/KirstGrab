@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.3.17"
+CURRENT_VERSION = "1.4.0"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -527,6 +527,7 @@ def build_command(url, download_path, format_choice, filename=None):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
+    node_path = resource_path(os.path.join("bin", "node", "node.exe"))
     ffmpeg_dir = os.path.dirname(ffmpeg_path)
     
     cmd = [
@@ -538,8 +539,10 @@ def build_command(url, download_path, format_choice, filename=None):
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
-    
-    
+
+    # Проверка наличия JS
+    if os.path.exists(node_path):
+        cmd.extend(["--js-interpreter", node_path])
     # Handle cookies - only use cookies.txt file
     cookies_path = resource_path("cookies.txt")
     ensure_cookies_file(cookies_path)
