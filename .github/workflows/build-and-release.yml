@@ -67,7 +67,7 @@ jobs:
             --add-binary 'yt-dlp.exe;bin' `
             --add-binary 'ffmpeg\ffmpeg.exe;bin' `
             --add-binary 'ffmpeg\ffprobe.exe;bin' `
-            --add-binary 'ffmpeg\*.dll;bin'
+            --add-binary 'ffmpeg\*.dll;bin' `
             --add-binary 'node\node.exe;bin\node'
 
       - name: Prepare archive
