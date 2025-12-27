@@ -535,6 +535,7 @@ def build_command(url, download_path, format_choice, filename=None):
         "--no-check-certificates",  # Skip SSL certificate verification
         "--prefer-free-formats",    # Prefer free formats when available
         "--merge-output-format", "mp4",  # Merge to MP4 when possible
+        "--no-js-runtimes",
         url,
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
@@ -542,7 +543,7 @@ def build_command(url, download_path, format_choice, filename=None):
 
     # Проверка наличия JS
     if os.path.exists(node_path):
-        cmd.extend(["--js-interpreter", node_path])
+        cmd.extend(["--js-runtimes", f"node:{node_path}"])
     # Handle cookies - only use cookies.txt file
     cookies_path = resource_path("cookies.txt")
     ensure_cookies_file(cookies_path)
