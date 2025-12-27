@@ -32,6 +32,13 @@ jobs:
           $asset = $rel.assets | Where-Object { $_.name -like '*yt-dlp.exe' } | Select-Object -First 1
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'yt-dlp.exe'
 
+      - name: Download Node.js (portable)
+        run: |
+          Invoke-WebRequest https://nodejs.org/dist/v20.11.1/node-v20.11.1-win-x64.zip -OutFile node.zip
+          Expand-Archive node.zip node_tmp
+          New-Item -ItemType Directory -Force -Path .\node | Out-Null
+          Copy-Item node_tmp\node-*\node.exe .\node\ -Force
+
       - name: Download latest ffmpeg (BtbN builds)
         run: |
           $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers @{Accept='application/vnd.github+json'}
@@ -61,6 +68,7 @@ jobs:
             --add-binary 'ffmpeg\ffmpeg.exe;bin' `
             --add-binary 'ffmpeg\ffprobe.exe;bin' `
             --add-binary 'ffmpeg\*.dll;bin'
+            --add-binary 'node\node.exe;bin\node'
 
       - name: Prepare archive
         run: |
