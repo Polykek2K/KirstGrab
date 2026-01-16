@@ -535,14 +535,14 @@ def build_command(url, download_path, format_choice, filename=None):
         "--no-check-certificates",  # Skip SSL certificate verification
         "--prefer-free-formats",    # Prefer free formats when available
         "--merge-output-format", "mp4",  # Merge to MP4 when possible
-        "--no-js-runtimes",
+        # "--no-js-runtimes",
         url,
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
 
-    # Add YouTube extractor arguments
-    cmd.extend(["--extractor-args", "youtube:player_client=default,-web"])
+    # # Add YouTube extractor arguments
+    # cmd.extend(["--extractor-args", "youtube:player_client=default,-web_safari"])
     
     # Проверка наличия JS
     if os.path.exists(node_path):
@@ -569,7 +569,7 @@ def build_command(url, download_path, format_choice, filename=None):
         cmd.extend(["-f", "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"])
     elif format_choice == "Best Quality (Any Format)":
         # Download best available quality in any format
-        cmd.extend(["-f", "bestvideo+bestaudio/best"])
+        cmd.extend(["-t", "mp4"])
     elif format_choice == "1080p (MP4)":
         # Download 1080p video, fallback to best available
         cmd.extend(["-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best"])
