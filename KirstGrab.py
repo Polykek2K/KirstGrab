@@ -542,7 +542,7 @@ def build_command(url, download_path, format_choice, filename=None):
     ]
 
     # Add YouTube extractor arguments
-    cmd.extend(["--extractor-args", "youtube:player_client=default,-web_safari"])
+    cmd.extend(["--extractor-args", "youtube:player_client=default,-web"])
     
     # Проверка наличия JS
     if os.path.exists(node_path):
