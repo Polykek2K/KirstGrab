@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.1"
+CURRENT_VERSION = "1.4.2"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -527,7 +527,7 @@ def build_command(url, download_path, format_choice, filename=None):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
-    node_path = resource_path(os.path.join("bin", "node", "node.exe"))
+    deno_path = resource_path(os.path.join("bin", "deno", "deno.exe"))
     ffmpeg_dir = os.path.dirname(ffmpeg_path)
     
     cmd = [
@@ -535,18 +535,18 @@ def build_command(url, download_path, format_choice, filename=None):
         "--no-check-certificates",  # Skip SSL certificate verification
         "--prefer-free-formats",    # Prefer free formats when available
         "--merge-output-format", "mp4",  # Merge to MP4 when possible
-        # "--no-js-runtimes",
+        "--no-js-runtimes",
         url,
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
     ]
 
     # # Add YouTube extractor arguments
-    # cmd.extend(["--extractor-args", "youtube:player_client=default,-web_safari"])
+    cmd.extend(["--extractor-args", "youtube:player_client=default,-web_safari"])
     
     # Проверка наличия JS
-    if os.path.exists(node_path):
-        cmd.extend(["--js-runtimes", f"node:{node_path}"])
+    if os.path.exists(deno_path):
+        cmd.extend(["--js-runtimes", f"deno:{deno_path}"])
     # Handle cookies - only use cookies.txt file
     cookies_path = resource_path("cookies.txt")
     ensure_cookies_file(cookies_path)
