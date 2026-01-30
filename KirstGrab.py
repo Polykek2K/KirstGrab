@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.3"
+CURRENT_VERSION = "1.4.4"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
