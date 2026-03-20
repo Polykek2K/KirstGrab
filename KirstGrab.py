@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.6"
+CURRENT_VERSION = "1.4.7"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -542,7 +542,7 @@ def build_command(url, download_path, format_choice, filename=None):
     ]
 
     # # Add YouTube extractor arguments
-    cmd.extend(["--extractor-args", "youtube:player_client=default,-web_safari"])
+    cmd.extend(["--extractor-args", "youtube:player_client=default,-tv_downgraded"])
     
     # Проверка наличия JS
     if os.path.exists(deno_path):
