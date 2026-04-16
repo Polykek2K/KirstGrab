@@ -551,7 +551,7 @@ def build_command(url, download_path, format_choice, filename=None):
     cookies_path = resource_path("cookies.txt")
     ensure_cookies_file(cookies_path)
     # Only use cookies if the file is not empty
-    if os.path.getsize(cookies_path) > 0 and format_choice == "Best Quality (MP4):
+    if os.path.getsize(cookies_path) > 0 and format_choice == "Best Quality (MP4)":
         cmd.extend(["--cookies", cookies_path])
     
     # Handle custom filename if provided and not empty
