@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.8"
+CURRENT_VERSION = "1.4.9"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -539,6 +539,7 @@ def build_command(url, download_path, format_choice, filename=None):
         url,
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
+        "-o", os.path.join(download_path, "%(title)s.%(ext)s"),
     ]
 
     # # Add YouTube extractor arguments
