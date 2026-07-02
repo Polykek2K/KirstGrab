@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.0"
+CURRENT_VERSION = "1.4.10"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -527,7 +527,7 @@ def build_command(url, download_path, format_choice, filename=None):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
-    node_path = resource_path(os.path.join("bin", "node", "node.exe"))
+    deno_path = resource_path(os.path.join("bin", "deno", "deno.exe"))
     ffmpeg_dir = os.path.dirname(ffmpeg_path)
     
     cmd = [
@@ -539,11 +539,15 @@ def build_command(url, download_path, format_choice, filename=None):
         url,
         "-P", download_path,
         "--progress-template", "%(progress._percent_str)s %(progress._eta_str)s",
+        "-o", os.path.join(download_path, "%(title)s.%(ext)s"),
     ]
 
+    # # Add YouTube extractor arguments
+    cmd.extend(["--extractor-args", "youtube:player_client=default,-tv_downgraded"])
+    
     # Проверка наличия JS
-    if os.path.exists(node_path):
-        cmd.extend(["--js-runtimes", f"node:{node_path}"])
+    if os.path.exists(deno_path):
+        cmd.extend(["--js-runtimes", f"deno:{deno_path}"])
     # Handle cookies - only use cookies.txt file
     cookies_path = resource_path("cookies.txt")
     ensure_cookies_file(cookies_path)
@@ -562,20 +566,13 @@ def build_command(url, download_path, format_choice, filename=None):
     
     # Set format based on choice
     if format_choice == "Best Quality (MP4)":
-        # Download best video+audio, prefer MP4, fallback to best available
-        cmd.extend(["-f", "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"])
-    elif format_choice == "Best Quality (Any Format)":
-        # Download best available quality in any format
-        cmd.extend(["-f", "bestvideo+bestaudio/best"])
-    elif format_choice == "1080p (MP4)":
-        # Download 1080p video, fallback to best available
-        cmd.extend(["-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best"])
-    elif format_choice == "720p (MP4)":
-        # Download 720p video, fallback to best available
-        cmd.extend(["-f", "best[height<=720][ext=mp4]/bestvideo[height<=720]+bestaudio[ext=m4a]/best[height<=720]/best"])
-    elif format_choice == "480p (MP4)":
-        # Download 480p video, fallback to best available
-        cmd.extend(["-f", "best[height<=480][ext=mp4]/bestvideo[height<=480]+bestaudio[ext=m4a]/best[height<=480]/best"])
+        cmd.extend(["-t", "mp4"])
+    # elif format_choice == "1080p (MP4)":
+    #     cmd.extend(["-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080]+bestaudio[ext=m4a]/best[height<=1080]/best"])
+    # elif format_choice == "720p (MP4)":
+    #     cmd.extend(["-f", "best[height<=720][ext=mp4]/bestvideo[height<=720]+bestaudio[ext=m4a]/best[height<=720]/best"])
+    # elif format_choice == "480p (MP4)":
+    #     cmd.extend(["-f", "best[height<=480][ext=mp4]/bestvideo[height<=480]+bestaudio[ext=m4a]/best[height<=480]/best"])
     elif format_choice == "Audio only (MP3)":
         # Download best audio and convert to MP3
         cmd.extend(["-f", "bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "0"])
@@ -790,10 +787,6 @@ format_label.pack(side=tk.LEFT, padx=5)
 
 format_options = [
     "Best Quality (MP4)",
-    "Best Quality (Any Format)", 
-    "1080p (MP4)",
-    "720p (MP4)",
-    "480p (MP4)",
     "Audio only (MP3)"
 ]
 

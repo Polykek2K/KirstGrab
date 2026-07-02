@@ -32,12 +32,12 @@ jobs:
           $asset = $rel.assets | Where-Object { $_.name -like '*yt-dlp.exe' } | Select-Object -First 1
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'yt-dlp.exe'
 
-      - name: Download Node.js (portable)
+      - name: Download Deno (portable)
         run: |
-          Invoke-WebRequest https://nodejs.org/dist/v20.11.1/node-v20.11.1-win-x64.zip -OutFile node.zip
-          Expand-Archive node.zip node_tmp
-          New-Item -ItemType Directory -Force -Path .\node | Out-Null
-          Copy-Item node_tmp\node-*\node.exe .\node\ -Force
+          Invoke-WebRequest https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip -OutFile deno.zip
+          Expand-Archive deno.zip deno_tmp
+          New-Item -ItemType Directory -Force -Path .\deno | Out-Null
+          Copy-Item deno_tmp\deno.exe .\deno\ -Force
 
       - name: Download latest ffmpeg (BtbN builds)
         run: |
@@ -68,7 +68,7 @@ jobs:
             --add-binary 'ffmpeg\ffmpeg.exe;bin' `
             --add-binary 'ffmpeg\ffprobe.exe;bin' `
             --add-binary 'ffmpeg\*.dll;bin' `
-            --add-binary 'node\node.exe;bin\node'
+            --add-binary 'deno\deno.exe;bin\deno'
 
       - name: Prepare archive
         run: |
