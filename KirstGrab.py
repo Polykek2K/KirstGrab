@@ -99,7 +99,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.10"
+CURRENT_VERSION = "1.4.11"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -246,14 +246,156 @@ def show_update_dialog(latest_info):
 
 def start_update(dialog, latest_info, progress_label, progress_bar, progress_frame):
     """Start the update process"""
+    def run_on_ui(callback):
+        try:
+            root.after(0, callback)
+        except tk.TclError:
+            pass
+
+    def set_progress(text=None, percent=None):
+        def apply_progress():
+            try:
+                if not dialog.winfo_exists():
+                    return
+                if text is not None:
+                    progress_label.config(text=text)
+                if percent is not None:
+                    progress_width = int(300 * (percent / 100))
+                    progress_bar.config(width=progress_width)
+            except tk.TclError:
+                pass
+        run_on_ui(apply_progress)
+
+    def show_update_error(message, title="Update Error"):
+        def show_error():
+            try:
+                messagebox.showerror(title, message)
+            except tk.TclError:
+                pass
+        set_progress("Update failed!")
+        run_on_ui(show_error)
+
+    def close_application():
+        try:
+            root.quit()
+            root.destroy()
+        except tk.TclError:
+            pass
+
+    def cleanup_temp_files(temp_zip, extract_dir, batch_script=None):
+        if temp_zip and os.path.exists(temp_zip):
+            try:
+                os.remove(temp_zip)
+            except OSError:
+                pass
+        if extract_dir and os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        if batch_script and os.path.exists(batch_script):
+            try:
+                os.remove(batch_script)
+            except OSError:
+                pass
+
+    def batch_escape(value):
+        return str(value).replace("%", "%%")
+
+    def write_windows_updater(batch_script, current_pid, current_exe, temp_exe, temp_zip, extract_dir, backup_path):
+        log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
+        script = f'''@echo off
+setlocal
+chcp 65001 >nul
+set "PID={current_pid}"
+set "SOURCE={batch_escape(temp_exe)}"
+set "DEST={batch_escape(current_exe)}"
+set "BACKUP={batch_escape(backup_path)}"
+set "TEMPZIP={batch_escape(temp_zip)}"
+set "EXTRACTDIR={batch_escape(extract_dir)}"
+set "LOG={batch_escape(log_path)}"
+
+echo KirstGrab update started > "%LOG%"
+echo Waiting for process %PID% to exit... >> "%LOG%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue" >> "%LOG%" 2>&1
+timeout /t 1 /nobreak >nul
+
+if not exist "%SOURCE%" (
+    echo ERROR: New executable not found: %SOURCE% >> "%LOG%"
+    exit /b 1
+)
+
+if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
+
+if exist "%DEST%" (
+    echo Backing up current executable... >> "%LOG%"
+    move /Y "%DEST%" "%BACKUP%" >> "%LOG%" 2>&1
+    if errorlevel 1 (
+        echo ERROR: Could not create backup. >> "%LOG%"
+        exit /b 1
+    )
+)
+
+echo Installing new executable... >> "%LOG%"
+copy /Y "%SOURCE%" "%DEST%" >> "%LOG%" 2>&1
+if errorlevel 1 (
+    echo ERROR: Copy failed. Restoring backup if possible. >> "%LOG%"
+    if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
+    exit /b 1
+)
+
+if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
+if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
+if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
+
+for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
+echo Starting updated KirstGrab... >> "%LOG%"
+start "" /D "%DESTDIR%" "%DEST%"
+
+echo Update completed successfully. >> "%LOG%"
+del /f /q "%~f0" >nul 2>&1
+'''
+        with open(batch_script, "w", encoding="utf-8") as f:
+            f.write(script)
+
+    def launch_windows_updater(batch_script, temp_zip, extract_dir):
+        def launch_and_close():
+            try:
+                messagebox.showinfo(
+                    "Update Ready",
+                    "Update downloaded successfully.\nKirstGrab will close now and restart after the file is replaced."
+                )
+
+                creationflags = 0
+                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                    creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
+                if hasattr(subprocess, "DETACHED_PROCESS"):
+                    creationflags |= subprocess.DETACHED_PROCESS
+                if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    creationflags |= subprocess.CREATE_NO_WINDOW
+
+                subprocess.Popen(
+                    ["cmd.exe", "/c", batch_script],
+                    close_fds=True,
+                    creationflags=creationflags
+                )
+
+                try:
+                    dialog.grab_release()
+                    dialog.destroy()
+                except tk.TclError:
+                    pass
+                root.after(100, close_application)
+            except Exception as e:
+                cleanup_temp_files(temp_zip, extract_dir, batch_script)
+                messagebox.showerror("Update Error", f"Failed to start updater: {e}")
+                set_progress("Update failed!")
+        run_on_ui(launch_and_close)
+
     def update_progress(percent):
-        progress_label.config(text=f"Downloading update... {percent:.1f}%")
-        # Update progress bar width
-        progress_width = int(300 * (percent / 100))
-        progress_bar.config(width=progress_width)
-        dialog.update()
+        set_progress(f"Downloading update... {percent:.1f}%", percent)
     
     def download_and_replace():
+        temp_zip = None
+        extract_dir = None
+        updater_handoff = False
         try:
             # Find the ZIP asset (release package)
             assets = latest_info.get('assets', [])
@@ -265,24 +407,28 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
                     break
             
             if not zip_asset:
-                messagebox.showerror("Error", "Could not find release package in assets!")
+                show_update_error("Could not find release package in assets!", "Error")
+                return
+
+            if not getattr(sys, 'frozen', False):
+                show_update_error("Automatic replacement is available only in the packaged application.")
                 return
             
             # Download ZIP to temporary file
             temp_dir = tempfile.gettempdir()
-            temp_zip = os.path.join(temp_dir, f"KirstGrab_update_{zip_asset['name']}")
+            asset_name = os.path.basename(zip_asset.get('name', 'release.zip'))
+            temp_zip = os.path.join(temp_dir, f"KirstGrab_update_{os.getpid()}_{asset_name}")
             
-            progress_label.config(text="Downloading update...")
+            set_progress("Downloading update...", 0)
             
             if not download_file(zip_asset['browser_download_url'], temp_zip, update_progress):
-                messagebox.showerror("Error", "Failed to download update!")
+                show_update_error("Failed to download update!", "Error")
                 return
             
-            progress_label.config(text="Extracting update...")
+            set_progress("Extracting update...", 100)
             
             # Extract the ZIP file
-            extract_dir = os.path.join(temp_dir, "KirstGrab_extract")
-            os.makedirs(extract_dir, exist_ok=True)
+            extract_dir = tempfile.mkdtemp(prefix="KirstGrab_extract_")
             
             with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
@@ -295,158 +441,34 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
                         exe_files.append(os.path.join(root, file))
             
             if not exe_files:
-                messagebox.showerror("Error", "Could not find executable in release package!")
-                # Clean up
-                os.remove(temp_zip)
-                shutil.rmtree(extract_dir, ignore_errors=True)
+                show_update_error("Could not find executable in release package!", "Error")
                 return
             
             # Use the first (and likely only) executable found
             temp_exe = exe_files[0]
             
-            progress_label.config(text="Installing update...")
+            set_progress("Preparing restart...", 100)
             
-            # Get current executable path
-            if getattr(sys, 'frozen', False):
-                # Running as compiled executable
-                current_exe = sys.executable
-            else:
-                # Running as script
-                current_exe = os.path.abspath(__file__)
+            # Running as compiled executable
+            current_exe = sys.executable
             
-            # Create backup
             backup_path = current_exe + ".backup"
-            shutil.copy2(current_exe, backup_path)
             
             # On Windows, we need to use a different approach to replace the running executable
             if sys.platform.startswith("win"):
-                # Create a batch script to replace the executable after exit
-                batch_script = os.path.join(temp_dir, "update_kirstgrab.bat")
-                with open(batch_script, 'w') as f:
-                    f.write(f'''@echo off
-setlocal enabledelayedexpansion
-echo KirstGrab Update Script Started
-echo ================================
-
-echo Waiting for KirstGrab to close...
-timeout /t 3 /nobreak
-
-echo Terminating any remaining KirstGrab processes...
-taskkill /f /im KirstGrab.exe 2>nul
-taskkill /f /im python.exe 2>nul
-
-echo Waiting for processes to terminate...
-timeout /t 2 /nobreak
-
-echo.
-echo File Information:
-echo Source: {temp_exe}
-echo Destination: {current_exe}
-echo Backup: {backup_path}
-echo.
-
-if not exist "{temp_exe}" (
-    echo ERROR: New executable not found at {temp_exe}
-    echo Press any key to exit...
-    pause >nul
-    exit /b 1
-)
-
-echo Checking if destination is writable...
-if exist "{current_exe}" (
-    echo Destination file exists, checking permissions...
-    echo test > "{current_exe}.test" 2>nul
-    if exist "{current_exe}.test" (
-        del "{current_exe}.test" 2>nul
-        echo Destination is writable.
-    ) else (
-        echo ERROR: Cannot write to destination file!
-        echo Please run as administrator or close any antivirus software.
-        echo Press any key to exit...
-        pause >nul
-        exit /b 1
-    )
-)
-
-echo Replacing executable...
-copy /Y "{temp_exe}" "{current_exe}"
-if %errorlevel% neq 0 (
-    echo Copy failed! Trying move...
-    move /Y "{temp_exe}" "{current_exe}"
-    if %errorlevel% neq 0 (
-        echo Move also failed!
-        echo This might be due to file permissions or antivirus interference.
-        echo Please try running as administrator.
-        echo Press any key to exit...
-        pause >nul
-        exit /b 1
-    )
-)
-
-echo Verifying update...
-if exist "{current_exe}" (
-    echo Update successful!
-) else (
-    echo ERROR: Update verification failed!
-    echo Press any key to exit...
-    pause >nul
-    exit /b 1
-)
-
-echo.
-echo Cleaning up temporary files...
-del "{backup_path}" 2>nul
-del "{temp_zip}" 2>nul
-rmdir /s /q "{extract_dir}" 2>nul
-
-echo Starting new version...
-start "" "{current_exe}"
-
-echo.
-echo Update completed successfully!
-echo This window will close in 2 seconds...
-timeout /t 2 >nul
-del "{batch_script}" 2>nul
-''')
-                
-                progress_label.config(text="Update completed! Restarting application...")
-                dialog.update()
-                
-                # Show restart message
-                messagebox.showinfo("Update Complete", 
-                                  "Update completed successfully!\nThe application will now restart.")
-                
-                # Execute the batch script and exit
-                print(f"Executing batch script: {batch_script}")
-                print(f"Temp exe: {temp_exe}")
-                print(f"Current exe: {current_exe}")
-                
-                # Try to run the batch script with more visibility
-                try:
-                    # Use subprocess.run with proper error handling
-                    result = subprocess.run([batch_script], 
-                                          shell=True, 
-                                          capture_output=False,
-                                          text=True,
-                                          timeout=60)  # 60 second timeout
-                    print(f"Batch script completed with return code: {result.returncode}")
-                except subprocess.TimeoutExpired:
-                    print("Batch script timed out, but update may have succeeded")
-                except Exception as e:
-                    print(f"Failed to start batch script: {e}")
-                    # Try alternative method
-                    try:
-                        os.startfile(batch_script)
-                    except Exception as e2:
-                        print(f"Alternative start method also failed: {e2}")
-                
-                # Properly close the application
-                try:
-                    root.quit()
-                    root.destroy()
-                except:
-                    pass
-                sys.exit(0)
+                batch_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.bat")
+                write_windows_updater(
+                    batch_script,
+                    os.getpid(),
+                    current_exe,
+                    temp_exe,
+                    temp_zip,
+                    extract_dir,
+                    backup_path
+                )
+                set_progress("Update ready. Restarting application...", 100)
+                updater_handoff = True
+                launch_windows_updater(batch_script, temp_zip, extract_dir)
             else:
                 # For non-Windows systems, try direct replacement
                 try:
@@ -456,30 +478,23 @@ del "{batch_script}" 2>nul
                     os.remove(temp_zip)
                     shutil.rmtree(extract_dir, ignore_errors=True)
                     
-                    progress_label.config(text="Update completed! Restarting application...")
-                    dialog.update()
-                    
-                    # Show restart message
-                    messagebox.showinfo("Update Complete", 
-                                      "Update completed successfully!\nThe application will now restart.")
-                    
-                    # Restart the application
-                    if getattr(sys, 'frozen', False):
-                        # For compiled executable
+                    def restart_non_windows():
+                        messagebox.showinfo(
+                            "Update Complete",
+                            "Update completed successfully!\nThe application will now restart."
+                        )
                         os.execv(current_exe, [current_exe] + sys.argv[1:])
-                    else:
-                        # For script
-                        os.execv(sys.executable, [sys.executable] + sys.argv)
+                    set_progress("Update completed! Restarting application...", 100)
+                    run_on_ui(restart_non_windows)
                 except PermissionError:
                     # If permission denied, show error and clean up
-                    messagebox.showerror("Update Error", 
-                                       "Permission denied! Please run the application as administrator to update.")
-                    os.remove(temp_zip)
-                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    show_update_error("Permission denied! Please run the application as administrator to update.")
                 
         except Exception as e:
-            messagebox.showerror("Update Error", f"Failed to update: {str(e)}")
-            progress_label.config(text="Update failed!")
+            show_update_error(f"Failed to update: {str(e)}")
+        finally:
+            if not updater_handoff:
+                cleanup_temp_files(temp_zip, extract_dir)
     
     # Start download in separate thread
     threading.Thread(target=download_and_replace, daemon=True).start()
