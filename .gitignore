@@ -5,14 +5,22 @@ __pycache__/
 
 build/
 dist/
+KirstGrab.spec
+release-*.zip
 
 node/
 node.zip
 node_tmp/
 
+deno/
+deno.zip
+deno_tmp/
+deno_tmp_*/
+
 ffmpeg/
 ffmpeg.zip
 ffmpeg_tmp/
+ffmpeg_tmp_*/
 
 yt-dlp.exe
 ffmpeg.exe

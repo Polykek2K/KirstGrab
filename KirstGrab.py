@@ -11,6 +11,7 @@ import json
 import tempfile
 import shutil
 import zipfile
+import re
 
 try:
     from PIL import Image, ImageTk, ImageFont
@@ -99,7 +100,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.4.11"
+CURRENT_VERSION = "1.5.0"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -519,6 +520,30 @@ def find_embedded_exe(name):
     p = resource_path(os.path.join("bin", name))
     return p if os.path.exists(p) else name
 
+def normalize_clip_time(value):
+    value = value.strip().replace(",", ".")
+    if not value:
+        return ""
+    if value.lower() == "inf":
+        return "inf"
+    if not re.fullmatch(r"-?(?:\d+(?::\d{1,2}){0,2}(?:\.\d+)?|\d*\.\d+)", value):
+        raise ValueError("Use time like 90, 1:30, 00:01:30, or leave one side empty.")
+    return value
+
+def build_clip_section(start_value, end_value):
+    start = normalize_clip_time(start_value)
+    end = normalize_clip_time(end_value)
+
+    if not start and not end:
+        raise ValueError("Set at least one clip time.")
+
+    if not start:
+        start = "0"
+    if not end:
+        end = "inf"
+
+    return f"*{start}-{end}"
+
 class ImageButton(tk.Canvas):
     def __init__(self, master=None, normal_img=None, pressed_img=None, command=None, **kwargs):
         super().__init__(master, highlightthickness=0, bd=0, **kwargs)
@@ -538,7 +563,7 @@ class ImageButton(tk.Canvas):
         if self.command and 0 <= event.x <= self.winfo_width() and 0 <= event.y <= self.winfo_height():
             self.command()
 
-def build_command(url, download_path, format_choice, filename=None):
+def build_command(url, download_path, format_choice, filename=None, clip_section=None):
     yt = find_embedded_exe("yt-dlp.exe")
     ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
     ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
@@ -578,6 +603,9 @@ def build_command(url, download_path, format_choice, filename=None):
         if name_without_ext.strip():
             output_template = os.path.join(download_path, name_without_ext + ".%(ext)s")
             cmd.extend(["-o", output_template])
+
+    if clip_section:
+        cmd.extend(["--download-sections", clip_section])
     
     # Set format based on choice
     if format_choice == "Best Quality (MP4)":
@@ -612,12 +640,14 @@ def build_command(url, download_path, format_choice, filename=None):
         output_text.config(state=tk.DISABLED)
     return cmd
 
-def start_download(url, download_path, format_choice, filename=None):
-    cmd = build_command(url, download_path, format_choice, filename)
+def start_download(url, download_path, format_choice, filename=None, clip_section=None):
+    cmd = build_command(url, download_path, format_choice, filename, clip_section)
     
     # Debug: Show the command being executed
     output_text.config(state=tk.NORMAL)
     output_text.insert(tk.END, f"Format: {format_choice}\n")
+    if clip_section:
+        output_text.insert(tk.END, f"Clip: {clip_section}\n")
     output_text.insert(tk.END, f"Command: {' '.join(cmd)}\n")
     output_text.config(state=tk.DISABLED)
     
@@ -707,6 +737,14 @@ def on_download_clicked():
         messagebox.showerror("Ошибка", "Введите URL видео!")
         return
     
+    clip_section = None
+    if clip_var.get():
+        try:
+            clip_section = build_clip_section(clip_start_var.get(), clip_end_var.get())
+        except ValueError as e:
+            messagebox.showerror("Invalid Clip", str(e))
+            return
+
     # Ask user to choose save location and filename
     # Use a simple default filename since this is YouTube-specific
     default_filename = "youtube_video.mp4"
@@ -730,8 +768,8 @@ def on_download_clicked():
     # Only use custom filename if it's not empty, just whitespace, or the default suggested name
     if not filename or not filename.strip() or filename == default_filename:
         filename = None
-    
-    start_download(url, download_path, format_var.get(), filename)
+
+    start_download(url, download_path, format_var.get(), filename, clip_section)
 
 root = tk.Tk()
 root.title("KirstGrab")
@@ -750,6 +788,7 @@ if os.path.exists(ico_p):
 # Increase GUI size by 50% to accommodate all controls
 default_width = int(500 * 1.5)  # 750
 default_height = int(350 * 1.25)  # 437
+expanded_height = default_height + 45
 root.geometry(f"{default_width}x{default_height}")
 root.resizable(False, False)  # Disable window resizing
 default_bg = "#2c3e50"
@@ -778,13 +817,15 @@ if os.path.exists(font_file) and PIL_AVAILABLE:
         tk_custom_font = ("Arial", 12)
 
 bg_photo = None
+bg_label = None
+bg_image_original = None
 frame_bg = default_bg
 bg_path = resource_path(os.path.join("images", "background.png"))
 if os.path.exists(bg_path) and PIL_AVAILABLE:
     try:
-        bg_image = Image.open(bg_path)
+        bg_image_original = Image.open(bg_path)
         # Resize background to match the increased window size (50% wider)
-        resized_bg = bg_image.resize((default_width, default_height), Image.Resampling.LANCZOS)
+        resized_bg = bg_image_original.resize((default_width, default_height), Image.Resampling.LANCZOS)
         bg_photo = ImageTk.PhotoImage(resized_bg)
         bg_label = tk.Label(root, image=bg_photo)
         bg_label.image = bg_photo
@@ -792,6 +833,18 @@ if os.path.exists(bg_path) and PIL_AVAILABLE:
         frame_bg = ""
     except Exception:
         frame_bg = default_bg
+
+def set_window_height(height):
+    global bg_photo
+    root.geometry(f"{default_width}x{height}")
+    if bg_label is not None and bg_image_original is not None and PIL_AVAILABLE:
+        try:
+            resized_bg = bg_image_original.resize((default_width, height), Image.Resampling.LANCZOS)
+            bg_photo = ImageTk.PhotoImage(resized_bg)
+            bg_label.config(image=bg_photo)
+            bg_label.image = bg_photo
+        except Exception:
+            pass
 
 settings_frame = tk.Frame(root, bg=frame_bg if frame_bg else default_bg, bd=0)
 settings_frame.pack(pady=5)
@@ -861,6 +914,49 @@ paste_button = tk.Button(entry_frame, text="📋 Paste", command=lambda: handle_
                         font=tk_custom_font, bg="#3498db", fg="white", 
                         activebackground="#2980b9", bd=0, padx=10)
 paste_button.pack(side=tk.LEFT)
+
+clip_var = tk.BooleanVar(value=False)
+clip_start_var = tk.StringVar()
+clip_end_var = tk.StringVar()
+
+def toggle_clip_controls():
+    if clip_var.get():
+        clip_controls_frame.pack(pady=(0, 5), before=help_label)
+        set_window_height(expanded_height)
+        clip_start_entry.focus_set()
+    else:
+        clip_controls_frame.pack_forget()
+        set_window_height(default_height)
+
+clip_check = tk.Checkbutton(
+    entry_frame,
+    text="Clip",
+    variable=clip_var,
+    command=toggle_clip_controls,
+    font=tk_custom_font,
+    bg=default_bg,
+    fg="white",
+    activebackground=default_bg,
+    activeforeground="white",
+    selectcolor="#34495e",
+    bd=0,
+    highlightthickness=0
+)
+clip_check.pack(side=tk.LEFT, padx=(10, 0))
+
+clip_controls_frame = tk.Frame(root, bg=default_bg)
+
+clip_start_label = tk.Label(clip_controls_frame, text="From:", bg=default_bg, fg="white", font=tk_custom_font)
+clip_start_label.pack(side=tk.LEFT, padx=(0, 4))
+
+clip_start_entry = tk.Entry(clip_controls_frame, width=10, font=tk_custom_font, bd=2, relief="flat", textvariable=clip_start_var)
+clip_start_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+clip_end_label = tk.Label(clip_controls_frame, text="To:", bg=default_bg, fg="white", font=tk_custom_font)
+clip_end_label.pack(side=tk.LEFT, padx=(0, 4))
+
+clip_end_entry = tk.Entry(clip_controls_frame, width=10, font=tk_custom_font, bd=2, relief="flat", textvariable=clip_end_var)
+clip_end_entry.pack(side=tk.LEFT)
 
 # Add help text
 help_label = tk.Label(root, text="💡 Tip: Right-click in the URL field for paste options", 
