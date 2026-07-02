@@ -297,66 +297,111 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
             except OSError:
                 pass
 
-    def batch_escape(value):
-        return str(value).replace("%", "%%")
+    def powershell_escape(value):
+        return str(value).replace("'", "''")
 
-    def write_windows_updater(batch_script, current_pid, current_exe, temp_exe, temp_zip, extract_dir, backup_path):
+    def write_windows_updater(updater_script, current_pid, current_exe, temp_exe, temp_zip, extract_dir, backup_path):
         log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
-        script = f'''@echo off
-setlocal
-chcp 65001 >nul
-set "PID={current_pid}"
-set "SOURCE={batch_escape(temp_exe)}"
-set "DEST={batch_escape(current_exe)}"
-set "BACKUP={batch_escape(backup_path)}"
-set "TEMPZIP={batch_escape(temp_zip)}"
-set "EXTRACTDIR={batch_escape(extract_dir)}"
-set "LOG={batch_escape(log_path)}"
+        script = f'''$ErrorActionPreference = 'Stop'
+$PidToWait = {current_pid}
+$Source = '{powershell_escape(temp_exe)}'
+$Dest = '{powershell_escape(current_exe)}'
+$Backup = '{powershell_escape(backup_path)}'
+$TempZip = '{powershell_escape(temp_zip)}'
+$ExtractDir = '{powershell_escape(extract_dir)}'
+$Log = '{powershell_escape(log_path)}'
+$Staged = "$Dest.new"
 
-echo KirstGrab update started > "%LOG%"
-echo Waiting for process %PID% to exit... >> "%LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue" >> "%LOG%" 2>&1
-timeout /t 1 /nobreak >nul
+function Write-UpdateLog {{
+    param([string]$Message)
+    $stamp = Get-Date -Format o
+    Add-Content -LiteralPath $Log -Value "$stamp $Message"
+}}
 
-if not exist "%SOURCE%" (
-    echo ERROR: New executable not found: %SOURCE% >> "%LOG%"
-    exit /b 1
-)
+function Remove-IfExists {{
+    param([string]$Path)
+    if ($Path -and (Test-Path -LiteralPath $Path)) {{
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    }}
+}}
 
-if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
+Set-Content -LiteralPath $Log -Value "KirstGrab update started"
+try {{
+    Write-UpdateLog "Waiting for process $PidToWait to exit"
+    Wait-Process -Id $PidToWait -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 1200
 
-if exist "%DEST%" (
-    echo Backing up current executable... >> "%LOG%"
-    move /Y "%DEST%" "%BACKUP%" >> "%LOG%" 2>&1
-    if errorlevel 1 (
-        echo ERROR: Could not create backup. >> "%LOG%"
-        exit /b 1
-    )
-)
+    if (-not (Test-Path -LiteralPath $Source)) {{
+        throw "New executable not found: $Source"
+    }}
 
-echo Installing new executable... >> "%LOG%"
-copy /Y "%SOURCE%" "%DEST%" >> "%LOG%" 2>&1
-if errorlevel 1 (
-    echo ERROR: Copy failed. Restoring backup if possible. >> "%LOG%"
-    if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
-    exit /b 1
-)
+    $sourceItem = Get-Item -LiteralPath $Source
+    $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+    Write-UpdateLog "Source size: $($sourceItem.Length)"
+    Write-UpdateLog "Source SHA256: $sourceHash"
 
-if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
-if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
-if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
+    Write-UpdateLog "Copying update to staging path: $Staged"
+    Remove-IfExists $Staged
+    Copy-Item -LiteralPath $Source -Destination $Staged -Force
 
-for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
-echo Starting updated KirstGrab... >> "%LOG%"
-start "" /D "%DESTDIR%" "%DEST%"
+    $stagedItem = Get-Item -LiteralPath $Staged
+    if ($stagedItem.Length -ne $sourceItem.Length) {{
+        throw "Staged executable size mismatch. Source=$($sourceItem.Length), Staged=$($stagedItem.Length)"
+    }}
 
-echo Update completed successfully. >> "%LOG%"
-del /f /q "%~f0" >nul 2>&1
+    $stagedHash = (Get-FileHash -LiteralPath $Staged -Algorithm SHA256).Hash
+    if ($stagedHash -ne $sourceHash) {{
+        throw "Staged executable hash mismatch. Source=$sourceHash, Staged=$stagedHash"
+    }}
+    Write-UpdateLog "Staged executable verified"
+
+    Remove-IfExists $Backup
+    if (Test-Path -LiteralPath $Dest) {{
+        Write-UpdateLog "Moving current executable to backup: $Backup"
+        Move-Item -LiteralPath $Dest -Destination $Backup -Force
+    }}
+
+    Write-UpdateLog "Installing staged executable"
+    Move-Item -LiteralPath $Staged -Destination $Dest -Force
+
+    $destItem = Get-Item -LiteralPath $Dest
+    if ($destItem.Length -ne $sourceItem.Length) {{
+        throw "Installed executable size mismatch. Source=$($sourceItem.Length), Dest=$($destItem.Length)"
+    }}
+
+    $destHash = (Get-FileHash -LiteralPath $Dest -Algorithm SHA256).Hash
+    if ($destHash -ne $sourceHash) {{
+        throw "Installed executable hash mismatch. Source=$sourceHash, Dest=$destHash"
+    }}
+    Write-UpdateLog "Installed executable verified"
+
+    Start-Sleep -Milliseconds 1200
+    $destDir = Split-Path -Parent $Dest
+    Write-UpdateLog "Starting updated KirstGrab from $DestDir"
+    Start-Process -FilePath $Dest -WorkingDirectory $destDir
+
+    Write-UpdateLog "Update completed. Backup retained at $Backup"
+    Remove-IfExists $TempZip
+    Remove-IfExists $ExtractDir
+}}
+catch {{
+    Write-UpdateLog "ERROR: $($_.Exception.Message)"
+    Remove-IfExists $Staged
+    if ((-not (Test-Path -LiteralPath $Dest)) -and (Test-Path -LiteralPath $Backup)) {{
+        Write-UpdateLog "Restoring backup"
+        Move-Item -LiteralPath $Backup -Destination $Dest -Force
+    }}
+    exit 1
+}}
+finally {{
+    Start-Sleep -Seconds 2
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}}
 '''
-        with open(batch_script, "w", encoding="utf-8") as f:
+        with open(updater_script, "w", encoding="utf-8") as f:
             f.write(script)
 
-    def launch_windows_updater(batch_script, temp_zip, extract_dir):
+    def launch_windows_updater(updater_script, temp_zip, extract_dir):
         def launch_and_close():
             try:
                 messagebox.showinfo(
@@ -373,7 +418,14 @@ del /f /q "%~f0" >nul 2>&1
                     creationflags |= subprocess.CREATE_NO_WINDOW
 
                 subprocess.Popen(
-                    ["cmd.exe", "/c", batch_script],
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        updater_script
+                    ],
                     close_fds=True,
                     creationflags=creationflags
                 )
@@ -385,7 +437,7 @@ del /f /q "%~f0" >nul 2>&1
                     pass
                 root.after(100, close_application)
             except Exception as e:
-                cleanup_temp_files(temp_zip, extract_dir, batch_script)
+                cleanup_temp_files(temp_zip, extract_dir, updater_script)
                 messagebox.showerror("Update Error", f"Failed to start updater: {e}")
                 set_progress("Update failed!")
         run_on_ui(launch_and_close)
@@ -457,9 +509,9 @@ del /f /q "%~f0" >nul 2>&1
             
             # On Windows, we need to use a different approach to replace the running executable
             if sys.platform.startswith("win"):
-                batch_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.bat")
+                updater_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.ps1")
                 write_windows_updater(
-                    batch_script,
+                    updater_script,
                     os.getpid(),
                     current_exe,
                     temp_exe,
@@ -469,7 +521,7 @@ del /f /q "%~f0" >nul 2>&1
                 )
                 set_progress("Update ready. Restarting application...", 100)
                 updater_handoff = True
-                launch_windows_updater(batch_script, temp_zip, extract_dir)
+                launch_windows_updater(updater_script, temp_zip, extract_dir)
             else:
                 # For non-Windows systems, try direct replacement
                 try:
