@@ -23,7 +23,7 @@ KirstGrab — графический загрузчик видео и аудио
 - FFmpeg (`brew install ffmpeg`; скрипт установит его при необходимости).
 
 ```bash
-bash ./build-local-macos.sh --version 1.5.2
+bash ./build-local-macos.sh --version 1.6.1
 ```
 
 Результаты:
@@ -37,9 +37,13 @@ bash ./build-local-macos.sh --version 1.5.2
 
 ## GitHub Actions release
 
-Workflow `Build and Release` принимает версию, которая обязана совпадать с `CURRENT_VERSION` в `KirstGrab.py`. По умолчанию он работает в безопасном режиме build-only: создаёт Windows ZIP и два ad-hoc signed macOS ZIP как Actions artifacts, но не создаёт тег или Release.
+Сборки разделены на reusable workflows `Build Windows` и `Build macOS`; каждый из них можно запустить отдельно для получения платформенного Actions artifact. Единственный источник версии — `CURRENT_VERSION` в `KirstGrab.py`.
 
-Для официального релиза запустите workflow с `publish_release: true` именно из ветки `main`. Тогда отсутствие любого секрета подписи, ошибка Developer ID signing или notarization прерывает сборку; неподписанный macOS-архив не публикуется.
+Общий workflow `Build and Release` читает эту версию один раз и передаёт одинаковое значение выбранным сборкам. Параметр `target` принимает `windows`, `macos` или `all`, поэтому можно собрать и выпустить одну платформу либо обе сразу. По умолчанию workflow работает в безопасном режиме build-only и не создаёт тег или Release.
+
+Для официального релиза запустите workflow с `publish_release: true` именно из ветки `main`. Windows-only релиз не требует Apple secrets. Для `macos` и `all` отсутствие любого секрета подписи, ошибка Developer ID signing или notarization прерывает сборку; неподписанный macOS-архив не публикуется.
+
+Платформенные архивы можно добавлять по очереди в один релиз: существующий тег принимается только когда он указывает на тот же commit, после чего новый архив добавляется в GitHub Release. Повторная публикация одноимённого архива заменяет его.
 
 Для production-подписи macOS настройте:
 

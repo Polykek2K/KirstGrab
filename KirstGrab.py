@@ -4,7 +4,7 @@ import ctypes
 import threading
 import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox, font as tkfont
+from tkinter import filedialog, messagebox, font as tkfont, ttk
 import urllib.request
 import urllib.parse
 import json
@@ -213,6 +213,66 @@ def show_update_dialog(latest_info):
     latest_version = latest_info.get('tag_name', 'Unknown')
     release_name = latest_info.get('name', 'Latest Release')
     release_notes = latest_info.get('body', 'No release notes available.')
+
+    if sys.platform == "darwin":
+        dialog.geometry("480x340")
+        dialog.configure(bg="#1c1c1e")
+
+        update_content = ttk.Frame(
+            dialog, style="MacRoot.TFrame", padding=(28, 24, 28, 24)
+        )
+        update_content.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(
+            update_content, text="Update available", style="MacTitle.TLabel"
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            update_content,
+            text="A newer version of KirstGrab is ready to install.",
+            style="MacSubtitle.TLabel",
+        ).pack(anchor=tk.W, pady=(4, 18))
+
+        version_frame = ttk.Frame(update_content, style="MacCard.TFrame", padding=14)
+        version_frame.pack(fill=tk.X)
+        ttk.Label(
+            version_frame,
+            text=f"Current version   {CURRENT_VERSION}",
+            style="MacHint.TLabel",
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            version_frame,
+            text=f"New version       {latest_version}",
+            style="MacLabel.TLabel",
+        ).pack(anchor=tk.W, pady=(5, 0))
+
+        progress_frame = ttk.Frame(update_content, style="MacRoot.TFrame")
+        progress_frame.pack(fill=tk.X, pady=(18, 0))
+        progress_label = ttk.Label(progress_frame, text="", style="MacSubtitle.TLabel")
+        progress_label.pack(anchor=tk.W)
+        progress_track = tk.Frame(
+            progress_frame, bg="#3a3a3c", height=8, width=300, bd=0
+        )
+        progress_track.pack(anchor=tk.W, fill=tk.X, pady=(7, 0))
+        progress_track.pack_propagate(False)
+        progress_bar = tk.Frame(progress_track, bg="#0a84ff", height=8, width=0, bd=0)
+        progress_bar.pack(side=tk.LEFT)
+
+        button_frame = ttk.Frame(update_content, style="MacRoot.TFrame")
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
+        ttk.Button(
+            button_frame,
+            text="Update now",
+            style="MacAccent.TButton",
+            command=lambda: start_update(
+                dialog, latest_info, progress_label, progress_bar, progress_frame
+            ),
+        ).pack(side=tk.RIGHT)
+        ttk.Button(
+            button_frame,
+            text="Not now",
+            style="Mac.TButton",
+            command=dialog.destroy,
+        ).pack(side=tk.RIGHT, padx=(0, 10))
+        return
     
     # Title
     title_label = tk.Label(dialog, text=f"🔄 Update Available!", 
@@ -292,7 +352,10 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
                 if text is not None:
                     progress_label.config(text=text)
                 if percent is not None:
-                    progress_width = int(300 * (percent / 100))
+                    progress_total_width = 300
+                    if sys.platform == "darwin":
+                        progress_total_width = max(progress_bar.master.winfo_width(), 300)
+                    progress_width = int(progress_total_width * (percent / 100))
                     progress_bar.config(width=progress_width)
             except tk.TclError:
                 pass
@@ -1109,6 +1172,7 @@ if "--self-test" in sys.argv:
 
 root = tk.Tk()
 root.title("KirstGrab")
+IS_MACOS = sys.platform == "darwin"
 
 # Windows uses the embedded ICO here; macOS gets its Dock/Finder icon from the app bundle.
 ico_p = resource_path("icon.ico")
@@ -1121,23 +1185,30 @@ if sys.platform.startswith("win") and os.path.exists(ico_p):
             root.tk.call('wm', 'iconbitmap', root._w, ico_p)
         except Exception:
             pass
-# Increase GUI size by 50% to accommodate all controls
-default_width = int(500 * 1.5)  # 750
-default_height = int(350 * 1.25)  # 437
-expanded_height = default_height + 45
+# Windows keeps its established geometry and visual treatment. macOS uses a
+# separate layout below, sized for native spacing instead of image dimensions.
+if IS_MACOS:
+    default_width = 760
+    default_height = 610
+    expanded_height = 660
+    default_bg = "#1c1c1e"
+else:
+    default_width = int(500 * 1.5)  # 750
+    default_height = int(350 * 1.25)  # 437
+    expanded_height = default_height + 45
+    default_bg = "#2c3e50"
 root.geometry(f"{default_width}x{default_height}")
 root.minsize(default_width, default_height)
 root.resizable(True, True)
-default_bg = "#2c3e50"
 root.config(bg=default_bg)
 
 # Clear cookies file on startup
 clear_cookies_file()
 
-system_font_family = "Helvetica" if sys.platform == "darwin" else "Arial"
+system_font_family = "Helvetica Neue" if IS_MACOS else "Arial"
 tk_custom_font = (system_font_family, 12)
 font_file = resource_path(os.path.join("fonts", "m6x11plus.ttf"))
-if sys.platform != "darwin" and os.path.exists(font_file) and PIL_AVAILABLE:
+if not IS_MACOS and os.path.exists(font_file) and PIL_AVAILABLE:
     try:
         pil_font = ImageFont.truetype(font_file, size=12)
         family_name = pil_font.getname()[0]
@@ -1159,7 +1230,7 @@ bg_label = None
 bg_image_original = None
 frame_bg = default_bg
 bg_path = resource_path(os.path.join("images", "background.png"))
-if os.path.exists(bg_path) and PIL_AVAILABLE:
+if not IS_MACOS and os.path.exists(bg_path) and PIL_AVAILABLE:
     try:
         bg_image_original = Image.open(bg_path)
         # Resize background to match the increased window size (50% wider)
@@ -1174,7 +1245,8 @@ if os.path.exists(bg_path) and PIL_AVAILABLE:
 
 def set_window_height(height):
     global bg_photo
-    root.geometry(f"{default_width}x{height}")
+    window_width = max(root.winfo_width(), default_width) if IS_MACOS else default_width
+    root.geometry(f"{window_width}x{height}")
     if bg_label is not None and bg_image_original is not None and PIL_AVAILABLE:
         try:
             resized_bg = bg_image_original.resize((default_width, height), Image.Resampling.LANCZOS)
@@ -1184,41 +1256,12 @@ def set_window_height(height):
         except Exception:
             pass
 
-settings_frame = tk.Frame(root, bg=frame_bg if frame_bg else default_bg, bd=0)
-settings_frame.pack(pady=5)
-
 format_var = tk.StringVar(value="Best Quality (MP4)")
-format_label = tk.Label(settings_frame, text="Format:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
-format_label.pack(side=tk.LEFT, padx=5)
-
 format_options = [
     "Best Quality (MP4)",
     "Audio only (MP3)"
 ]
 
-format_menu = tk.OptionMenu(settings_frame, format_var, *format_options)
-format_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custom_font)
-format_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
-format_menu.pack(side=tk.LEFT)
-
-# Add cookies management
-cookies_label = tk.Label(settings_frame, text="Cookies:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
-cookies_label.pack(side=tk.LEFT, padx=(20, 5))
-
-# Add edit cookies button
-edit_cookies_btn = tk.Button(settings_frame, text="📝 Edit Cookies", command=edit_cookies_file,
-                            font=tk_custom_font, bg="#e67e22", fg="white", 
-                            activebackground="#d35400", bd=0, padx=8)
-edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-# Add paste cookies button
-paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command=paste_cookies,
-                             font=tk_custom_font, bg="#9b59b6", fg="white", 
-                             activebackground="#8e44ad", bd=0, padx=8)
-paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-
-# Add manual update check button
 def manual_update_check():
     """Manually check for updates"""
     try:
@@ -1235,71 +1278,260 @@ def manual_update_check():
     except Exception as e:
         messagebox.showerror("Update Check Error", f"Error checking for updates: {str(e)}")
 
-update_check_btn = tk.Button(settings_frame, text="🔄 Check Updates", command=manual_update_check,
-                            font=tk_custom_font, bg="#27ae60", fg="white", 
-                            activebackground="#229954", bd=0, padx=8)
-update_check_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-# Create entry frame with paste button
-entry_frame = tk.Frame(root, bg=default_bg)
-entry_frame.pack(pady=5)
-
-entry = tk.Entry(entry_frame, width=55, font=tk_custom_font, bd=2, relief="flat")
-entry.pack(side=tk.LEFT, padx=(0, 5))
-
-# Add a paste button as backup
-paste_button = tk.Button(entry_frame, text="📋 Paste", command=lambda: handle_paste(None), 
-                        font=tk_custom_font, bg="#3498db", fg="white", 
-                        activebackground="#2980b9", bd=0, padx=10)
-paste_button.pack(side=tk.LEFT)
-
 clip_var = tk.BooleanVar(value=False)
 clip_start_var = tk.StringVar()
 clip_end_var = tk.StringVar()
 
 def toggle_clip_controls():
     if clip_var.get():
-        clip_controls_frame.pack(pady=(0, 5), before=help_label)
+        if IS_MACOS:
+            clip_controls_frame.pack(fill=tk.X, pady=(12, 0), before=help_label)
+        else:
+            clip_controls_frame.pack(pady=(0, 5), before=help_label)
         set_window_height(expanded_height)
         clip_start_entry.focus_set()
     else:
         clip_controls_frame.pack_forget()
         set_window_height(default_height)
 
-clip_check = tk.Checkbutton(
-    entry_frame,
-    text="Clip",
-    variable=clip_var,
-    command=toggle_clip_controls,
-    font=tk_custom_font,
-    bg=default_bg,
-    fg="white",
-    activebackground=default_bg,
-    activeforeground="white",
-    selectcolor="#34495e",
-    bd=0,
-    highlightthickness=0
-)
-clip_check.pack(side=tk.LEFT, padx=(10, 0))
+mac_content = None
+if IS_MACOS:
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
 
-clip_controls_frame = tk.Frame(root, bg=default_bg)
+    style.configure("MacRoot.TFrame", background="#1c1c1e")
+    style.configure("MacCard.TFrame", background="#2c2c2e")
+    style.configure(
+        "MacTitle.TLabel",
+        background="#1c1c1e",
+        foreground="#f5f5f7",
+        font=(system_font_family, 24, "bold"),
+    )
+    style.configure(
+        "MacSubtitle.TLabel",
+        background="#1c1c1e",
+        foreground="#98989d",
+        font=(system_font_family, 11),
+    )
+    style.configure(
+        "MacLabel.TLabel",
+        background="#2c2c2e",
+        foreground="#f5f5f7",
+        font=(system_font_family, 11, "bold"),
+    )
+    style.configure(
+        "MacHint.TLabel",
+        background="#2c2c2e",
+        foreground="#98989d",
+        font=(system_font_family, 10),
+    )
+    style.configure(
+        "Mac.TButton",
+        background="#3a3a3c",
+        foreground="#f5f5f7",
+        borderwidth=0,
+        padding=(12, 8),
+        font=(system_font_family, 10),
+    )
+    style.map(
+        "Mac.TButton",
+        background=[("pressed", "#48484a"), ("active", "#48484a")],
+    )
+    style.configure(
+        "MacAccent.TButton",
+        background="#0a84ff",
+        foreground="white",
+        borderwidth=0,
+        padding=(16, 11),
+        font=(system_font_family, 12, "bold"),
+    )
+    style.map(
+        "MacAccent.TButton",
+        background=[("pressed", "#0060df"), ("active", "#409cff")],
+    )
+    style.configure(
+        "Mac.TCheckbutton",
+        background="#2c2c2e",
+        foreground="#f5f5f7",
+        font=(system_font_family, 11),
+    )
+    style.map(
+        "Mac.TCheckbutton",
+        background=[("active", "#2c2c2e")],
+        foreground=[("disabled", "#636366")],
+    )
+    style.configure(
+        "Mac.TEntry",
+        fieldbackground="#111113",
+        foreground="#f5f5f7",
+        bordercolor="#48484a",
+        lightcolor="#48484a",
+        darkcolor="#48484a",
+        padding=9,
+        font=(system_font_family, 12),
+    )
+    style.configure(
+        "Mac.TCombobox",
+        fieldbackground="#3a3a3c",
+        background="#3a3a3c",
+        foreground="#f5f5f7",
+        arrowcolor="#f5f5f7",
+        bordercolor="#48484a",
+        padding=6,
+        font=(system_font_family, 11),
+    )
+    style.map(
+        "Mac.TCombobox",
+        fieldbackground=[("readonly", "#3a3a3c")],
+        foreground=[("readonly", "#f5f5f7")],
+        selectbackground=[("readonly", "#3a3a3c")],
+        selectforeground=[("readonly", "#f5f5f7")],
+    )
+    root.option_add("*TCombobox*Listbox.background", "#2c2c2e")
+    root.option_add("*TCombobox*Listbox.foreground", "#f5f5f7")
+    root.option_add("*TCombobox*Listbox.selectBackground", "#0a84ff")
 
-clip_start_label = tk.Label(clip_controls_frame, text="From:", bg=default_bg, fg="white", font=tk_custom_font)
-clip_start_label.pack(side=tk.LEFT, padx=(0, 4))
+    mac_content = ttk.Frame(root, style="MacRoot.TFrame", padding=(28, 20, 28, 26))
+    mac_content.pack(fill=tk.BOTH, expand=True)
 
-clip_start_entry = tk.Entry(clip_controls_frame, width=10, font=tk_custom_font, bd=2, relief="flat", textvariable=clip_start_var)
-clip_start_entry.pack(side=tk.LEFT, padx=(0, 10))
+    header_frame = ttk.Frame(mac_content, style="MacRoot.TFrame")
+    header_frame.pack(fill=tk.X)
+    ttk.Label(header_frame, text="KirstGrab", style="MacTitle.TLabel").pack(anchor=tk.W)
+    ttk.Label(
+        header_frame,
+        text="Download video and audio without leaving your Mac",
+        style="MacSubtitle.TLabel",
+    ).pack(anchor=tk.W, pady=(2, 0))
 
-clip_end_label = tk.Label(clip_controls_frame, text="To:", bg=default_bg, fg="white", font=tk_custom_font)
-clip_end_label.pack(side=tk.LEFT, padx=(0, 4))
+    settings_frame = ttk.Frame(mac_content, style="MacCard.TFrame", padding=14)
+    settings_frame.pack(fill=tk.X, pady=(18, 12))
+    ttk.Label(settings_frame, text="Format", style="MacLabel.TLabel").pack(side=tk.LEFT)
+    format_menu = ttk.Combobox(
+        settings_frame,
+        textvariable=format_var,
+        values=format_options,
+        state="readonly",
+        width=20,
+        style="Mac.TCombobox",
+    )
+    format_menu.pack(side=tk.LEFT, padx=(10, 18))
+    update_check_btn = ttk.Button(
+        settings_frame, text="Updates", command=manual_update_check, style="Mac.TButton"
+    )
+    update_check_btn.pack(side=tk.RIGHT)
+    paste_cookies_btn = ttk.Button(
+        settings_frame, text="Paste cookies", command=paste_cookies, style="Mac.TButton"
+    )
+    paste_cookies_btn.pack(side=tk.RIGHT, padx=(0, 8))
+    edit_cookies_btn = ttk.Button(
+        settings_frame, text="Edit cookies", command=edit_cookies_file, style="Mac.TButton"
+    )
+    edit_cookies_btn.pack(side=tk.RIGHT, padx=(0, 8))
 
-clip_end_entry = tk.Entry(clip_controls_frame, width=10, font=tk_custom_font, bd=2, relief="flat", textvariable=clip_end_var)
-clip_end_entry.pack(side=tk.LEFT)
+    url_card = ttk.Frame(mac_content, style="MacCard.TFrame", padding=14)
+    url_card.pack(fill=tk.X, pady=(0, 12))
+    ttk.Label(url_card, text="Video URL", style="MacLabel.TLabel").pack(anchor=tk.W)
+    entry_frame = ttk.Frame(url_card, style="MacCard.TFrame")
+    entry_frame.pack(fill=tk.X, pady=(9, 0))
+    entry = ttk.Entry(entry_frame, style="Mac.TEntry")
+    entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    clip_check = ttk.Checkbutton(
+        entry_frame,
+        text="Clip",
+        variable=clip_var,
+        command=toggle_clip_controls,
+        style="Mac.TCheckbutton",
+    )
+    clip_check.pack(side=tk.RIGHT, padx=(12, 0))
+    paste_button = ttk.Button(
+        entry_frame, text="Paste", command=lambda: handle_paste(None), style="Mac.TButton"
+    )
+    paste_button.pack(side=tk.RIGHT, padx=(8, 0))
 
-# Add help text
-help_label = tk.Label(root, text="💡 Tip: Right-click in the URL field for paste options", 
-                     font=("Arial", 9), fg="#bdc3c7", bg=default_bg)
-help_label.pack(pady=(0, 5))
+    clip_controls_frame = ttk.Frame(url_card, style="MacCard.TFrame")
+    clip_start_label = ttk.Label(clip_controls_frame, text="From", style="MacLabel.TLabel")
+    clip_start_label.pack(side=tk.LEFT)
+    clip_start_entry = ttk.Entry(
+        clip_controls_frame, width=12, textvariable=clip_start_var, style="Mac.TEntry"
+    )
+    clip_start_entry.pack(side=tk.LEFT, padx=(8, 18))
+    clip_end_label = ttk.Label(clip_controls_frame, text="To", style="MacLabel.TLabel")
+    clip_end_label.pack(side=tk.LEFT)
+    clip_end_entry = ttk.Entry(
+        clip_controls_frame, width=12, textvariable=clip_end_var, style="Mac.TEntry"
+    )
+    clip_end_entry.pack(side=tk.LEFT, padx=(8, 0))
+    help_label = ttk.Label(
+        url_card,
+        text="Paste a link, choose a format, then select where to save the file.",
+        style="MacHint.TLabel",
+    )
+    help_label.pack(anchor=tk.W, pady=(10, 0))
+else:
+    settings_frame = tk.Frame(root, bg=frame_bg if frame_bg else default_bg, bd=0)
+    settings_frame.pack(pady=5)
+
+    format_label = tk.Label(settings_frame, text="Format:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
+    format_label.pack(side=tk.LEFT, padx=5)
+    format_menu = tk.OptionMenu(settings_frame, format_var, *format_options)
+    format_menu.config(bg="#2c3e50", fg="white", highlightthickness=0, font=tk_custom_font)
+    format_menu["menu"].config(bg="#2c3e50", fg="white", font=tk_custom_font)
+    format_menu.pack(side=tk.LEFT)
+
+    cookies_label = tk.Label(settings_frame, text="Cookies:", bg=frame_bg if frame_bg else default_bg, fg="white", font=tk_custom_font)
+    cookies_label.pack(side=tk.LEFT, padx=(20, 5))
+    edit_cookies_btn = tk.Button(settings_frame, text="📝 Edit Cookies", command=edit_cookies_file,
+                                font=tk_custom_font, bg="#e67e22", fg="white",
+                                activebackground="#d35400", bd=0, padx=8)
+    edit_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+    paste_cookies_btn = tk.Button(settings_frame, text="📋 Paste Cookies", command=paste_cookies,
+                                 font=tk_custom_font, bg="#9b59b6", fg="white",
+                                 activebackground="#8e44ad", bd=0, padx=8)
+    paste_cookies_btn.pack(side=tk.LEFT, padx=(10, 0))
+    update_check_btn = tk.Button(settings_frame, text="🔄 Check Updates", command=manual_update_check,
+                                font=tk_custom_font, bg="#27ae60", fg="white",
+                                activebackground="#229954", bd=0, padx=8)
+    update_check_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+    entry_frame = tk.Frame(root, bg=default_bg)
+    entry_frame.pack(pady=5)
+    entry = tk.Entry(entry_frame, width=55, font=tk_custom_font, bd=2, relief="flat")
+    entry.pack(side=tk.LEFT, padx=(0, 5))
+    paste_button = tk.Button(entry_frame, text="📋 Paste", command=lambda: handle_paste(None),
+                            font=tk_custom_font, bg="#3498db", fg="white",
+                            activebackground="#2980b9", bd=0, padx=10)
+    paste_button.pack(side=tk.LEFT)
+    clip_check = tk.Checkbutton(
+        entry_frame,
+        text="Clip",
+        variable=clip_var,
+        command=toggle_clip_controls,
+        font=tk_custom_font,
+        bg=default_bg,
+        fg="white",
+        activebackground=default_bg,
+        activeforeground="white",
+        selectcolor="#34495e",
+        bd=0,
+        highlightthickness=0,
+    )
+    clip_check.pack(side=tk.LEFT, padx=(10, 0))
+
+    clip_controls_frame = tk.Frame(root, bg=default_bg)
+    clip_start_label = tk.Label(clip_controls_frame, text="From:", bg=default_bg, fg="white", font=tk_custom_font)
+    clip_start_label.pack(side=tk.LEFT, padx=(0, 4))
+    clip_start_entry = tk.Entry(clip_controls_frame, width=10, font=tk_custom_font, bd=2, relief="flat", textvariable=clip_start_var)
+    clip_start_entry.pack(side=tk.LEFT, padx=(0, 10))
+    clip_end_label = tk.Label(clip_controls_frame, text="To:", bg=default_bg, fg="white", font=tk_custom_font)
+    clip_end_label.pack(side=tk.LEFT, padx=(0, 4))
+    clip_end_entry = tk.Entry(clip_controls_frame, width=10, font=tk_custom_font, bd=2, relief="flat", textvariable=clip_end_var)
+    clip_end_entry.pack(side=tk.LEFT)
+    help_label = tk.Label(root, text="💡 Tip: Right-click in the URL field for paste options",
+                         font=("Arial", 9), fg="#bdc3c7", bg=default_bg)
+    help_label.pack(pady=(0, 5))
 
 # Add keyboard shortcuts for better compatibility with non-English layouts
 def handle_paste(event):
@@ -1424,25 +1656,56 @@ entry.bind("<Key>", handle_key_press)               # All key events
 # Focus the entry widget by default
 entry.focus_set()
 
-output_text = tk.Text(root, height=12, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font, state=tk.DISABLED)
-output_text.pack(pady=5)
-
 btn_normal = None
 btn_pressed = None
-btn_normal_path = resource_path(os.path.join("images", "button_normal.png"))
-btn_pressed_path = resource_path(os.path.join("images", "button_pressed.png"))
-if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path) and PIL_AVAILABLE:
-    try:
-        btn_normal = ImageTk.PhotoImage(file=btn_normal_path)
-        btn_pressed = ImageTk.PhotoImage(file=btn_pressed_path)
-        button = ImageButton(root, normal_img=btn_normal, pressed_img=btn_pressed, command=on_download_clicked)
-        button.pack(pady=12)
-    except Exception:
+if IS_MACOS:
+    ttk.Label(mac_content, text="Activity", style="MacSubtitle.TLabel").pack(anchor=tk.W)
+    output_frame = ttk.Frame(mac_content, style="MacCard.TFrame", padding=2)
+    output_frame.pack(fill=tk.BOTH, expand=True, pady=(7, 12))
+    output_text = tk.Text(
+        output_frame,
+        height=10,
+        bg="#111113",
+        fg="#e5e5ea",
+        insertbackground="#f5f5f7",
+        selectbackground="#0a84ff",
+        bd=0,
+        relief="flat",
+        padx=12,
+        pady=10,
+        wrap=tk.WORD,
+        font=("Menlo", 10),
+        state=tk.DISABLED,
+    )
+    output_scrollbar = ttk.Scrollbar(output_frame, orient=tk.VERTICAL, command=output_text.yview)
+    output_text.configure(yscrollcommand=output_scrollbar.set)
+    output_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    button = ttk.Button(
+        mac_content,
+        text="Download",
+        command=on_download_clicked,
+        style="MacAccent.TButton",
+    )
+    button.pack(fill=tk.X)
+else:
+    output_text = tk.Text(root, height=12, width=60, bg="#34495e", fg="white", insertbackground="white", bd=2, relief="flat", font=tk_custom_font, state=tk.DISABLED)
+    output_text.pack(pady=5)
+
+    btn_normal_path = resource_path(os.path.join("images", "button_normal.png"))
+    btn_pressed_path = resource_path(os.path.join("images", "button_pressed.png"))
+    if os.path.exists(btn_normal_path) and os.path.exists(btn_pressed_path) and PIL_AVAILABLE:
+        try:
+            btn_normal = ImageTk.PhotoImage(file=btn_normal_path)
+            btn_pressed = ImageTk.PhotoImage(file=btn_pressed_path)
+            button = ImageButton(root, normal_img=btn_normal, pressed_img=btn_pressed, command=on_download_clicked)
+            button.pack(pady=12)
+        except Exception:
+            button = tk.Button(root, text="Download", font=tk_custom_font, padx=6, pady=6, command=on_download_clicked, height=2, width=14, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
+            button.pack(pady=12)
+    else:
         button = tk.Button(root, text="Download", font=tk_custom_font, padx=6, pady=6, command=on_download_clicked, height=2, width=14, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
         button.pack(pady=12)
-else:
-    button = tk.Button(root, text="Download", font=tk_custom_font, padx=6, pady=6, command=on_download_clicked, height=2, width=14, bg="#e74c3c", fg="white", activebackground="#c0392b", bd=0)
-    button.pack(pady=12)
 
 # Check for updates on startup
 check_for_updates()
