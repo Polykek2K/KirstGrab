@@ -20,8 +20,10 @@ from kirstgrab_platform import (
     bundled_binary_paths,
     clean_subprocess_environment,
     cookies_file_path,
+    directory_is_writable,
     find_macos_app_bundle,
     find_macos_app_in_tree,
+    macos_app_requires_manual_replacement,
     release_platform_key,
     select_release_asset,
 )
@@ -131,7 +133,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.6.2"
+CURRENT_VERSION = "1.6.3"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -408,8 +410,11 @@ set "EXTRACTDIR={batch_escape(extract_dir)}"
 set "LOG={batch_escape(log_path)}"
 
 echo KirstGrab update started > "%LOG%"
+for /F "tokens=1 delims==" %%V in ('set _PYI_ 2^>nul') do set "%%V="
+set "_MEIPASS2="
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
 echo Waiting for process %PID% to exit... >> "%LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue" >> "%LOG%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 1500" >> "%LOG%" 2>&1
 
 if not exist "%SOURCE%" (
     echo ERROR: New executable not found: %SOURCE% >> "%LOG%"
@@ -418,12 +423,12 @@ if not exist "%SOURCE%" (
 
 if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
 
-for /L %%A in (1,1,30) do (
+for /L %%A in (1,1,60) do (
     if not exist "%DEST%" goto install_update
     echo Backing up current executable (attempt %%A)... >> "%LOG%"
     move /Y "%DEST%" "%BACKUP%" >> "%LOG%" 2>&1
     if not errorlevel 1 goto install_update
-    timeout /t 1 /nobreak >nul
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Milliseconds 500" >nul 2>&1
 )
 echo ERROR: Current executable stayed locked for 30 seconds. >> "%LOG%"
 goto update_failed
@@ -436,6 +441,13 @@ if errorlevel 1 (
     if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
     goto update_failed
 )
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if ((Get-FileHash -LiteralPath $env:SOURCE -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $env:DEST -Algorithm SHA256).Hash) {{ exit 1 }}" >> "%LOG%" 2>&1
+if errorlevel 1 (
+    echo ERROR: Installed executable hash does not match the downloaded executable. >> "%LOG%"
+    del /f /q "%DEST%" >> "%LOG%" 2>&1
+    if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
+    goto update_failed
+)
 
 if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
 if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
@@ -443,9 +455,6 @@ if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
 
 for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
 echo Starting updated KirstGrab... >> "%LOG%"
-for /F "tokens=1 delims==" %%V in ('set _PYI_ 2^>nul') do set "%%V="
-set "_MEIPASS2="
-set "PYINSTALLER_RESET_ENVIRONMENT=1"
 start "" /D "%DESTDIR%" "%DEST%"
 
 echo Update completed successfully. >> "%LOG%"
@@ -456,10 +465,8 @@ exit /b 0
 if not exist "%DEST%" if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
 if not exist "%DEST%" goto cleanup_failed_update
 for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
-for /F "tokens=1 delims==" %%V in ('set _PYI_ 2^>nul') do set "%%V="
-set "_MEIPASS2="
-set "PYINSTALLER_RESET_ENVIRONMENT=1"
 start "" /D "%DESTDIR%" "%DEST%"
+powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show(('Automatic update failed. The previous version was restored.' + [Environment]::NewLine + 'Log: ' + $env:LOG), 'KirstGrab Update')" >> "%LOG%" 2>&1
 :cleanup_failed_update
 if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
 if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
@@ -469,12 +476,17 @@ exit /b 1
         with open(batch_script, "w", encoding="utf-8") as f:
             f.write(script)
 
-    def launch_windows_updater(batch_script, temp_zip, extract_dir):
+    def launch_windows_updater(batch_script, temp_zip, extract_dir, requires_admin):
         def launch_and_close():
             try:
+                permission_note = ""
+                if requires_admin:
+                    permission_note = "\nWindows will ask for administrator permission."
                 messagebox.showinfo(
                     "Update Ready",
-                    "Update downloaded successfully.\nKirstGrab will close now and restart after the file is replaced."
+                    "Update downloaded successfully.\n"
+                    "KirstGrab will close now and restart after the file is replaced."
+                    f"{permission_note}"
                 )
 
                 creationflags = 0
@@ -487,12 +499,27 @@ exit /b 1
 
                 child_env = clean_subprocess_environment()
                 child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-                subprocess.Popen(
-                    ["cmd.exe", "/c", batch_script],
-                    close_fds=True,
-                    creationflags=creationflags,
-                    env=child_env,
-                )
+                command_processor = os.environ.get("COMSPEC", "cmd.exe")
+                command = [command_processor, "/d", "/c", "call", batch_script]
+                if requires_admin:
+                    parameters = subprocess.list2cmdline(command[1:])
+                    result = ctypes.windll.shell32.ShellExecuteW(
+                        None,
+                        "runas",
+                        command_processor,
+                        parameters,
+                        os.path.dirname(sys.executable),
+                        0,
+                    )
+                    if result <= 32:
+                        raise OSError(f"Administrator launch failed with code {result}")
+                else:
+                    subprocess.Popen(
+                        command,
+                        close_fds=True,
+                        creationflags=creationflags,
+                        env=child_env,
+                    )
 
                 try:
                     dialog.grab_release()
@@ -506,7 +533,15 @@ exit /b 1
                 set_progress("Update failed!")
         run_on_ui(launch_and_close)
 
-    def write_macos_updater(helper_script, current_pid, source_app, destination_app, temp_zip, extract_dir):
+    def write_macos_updater(
+        helper_script,
+        current_pid,
+        source_app,
+        destination_app,
+        temp_zip,
+        extract_dir,
+        requires_admin,
+    ):
         log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
         quoted = {
             "source": shlex.quote(source_app),
@@ -521,6 +556,7 @@ exit /b 1
         script = f'''#!/bin/sh
 set -u
 PID={current_pid}
+REQUIRES_ADMIN={1 if requires_admin else 0}
 SOURCE={quoted["source"]}
 DEST={quoted["destination"]}
 BACKUP={quoted["backup"]}
@@ -534,21 +570,62 @@ log() {{
     /bin/echo "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$LOG"
 }}
 
+install_bundle() {{
+    if ! /bin/rm -rf "$STAGED"; then
+        return 10
+    fi
+    if ! /usr/bin/ditto "$SOURCE" "$STAGED"; then
+        /bin/rm -rf "$STAGED"
+        return 11
+    fi
+    if [ ! -x "$STAGED/Contents/MacOS/KirstGrab" ]; then
+        /bin/rm -rf "$STAGED"
+        return 12
+    fi
+
+    if ! /bin/rm -rf "$BACKUP"; then
+        /bin/rm -rf "$STAGED"
+        return 13
+    fi
+    if [ -d "$DEST" ] && ! /bin/mv "$DEST" "$BACKUP"; then
+        /bin/rm -rf "$STAGED"
+        return 14
+    fi
+    if ! /bin/mv "$STAGED" "$DEST"; then
+        if [ -d "$BACKUP" ]; then
+            /bin/mv "$BACKUP" "$DEST" || true
+        fi
+        return 15
+    fi
+    if ! /usr/bin/codesign --verify --deep --strict "$DEST" >> "$LOG" 2>&1; then
+        /bin/rm -rf "$DEST"
+        if [ -d "$BACKUP" ]; then
+            /bin/mv "$BACKUP" "$DEST" || true
+        fi
+        return 16
+    fi
+    /bin/rm -rf "$BACKUP" || log "WARNING: Could not remove the previous app backup"
+    return 0
+}}
+
 fail() {{
     log "ERROR: $1"
     /bin/rm -rf "$STAGED"
-    if [ ! -d "$DEST" ] && [ -d "$BACKUP" ]; then
-        /bin/mv "$BACKUP" "$DEST" || log "ERROR: Could not restore the previous app bundle"
-    fi
     if [ -d "$DEST" ]; then
         PYINSTALLER_RESET_ENVIRONMENT=1 /usr/bin/open -n "$DEST" >> "$LOG" 2>&1 || \
             log "ERROR: Could not reopen KirstGrab after the failed update"
     fi
+    /usr/bin/osascript -e 'display alert "KirstGrab update failed" message "The update did not finish. See KirstGrab_update.log in the temporary folder for details." as critical' >/dev/null 2>&1 || true
     /bin/rm -f "$TEMPZIP"
     /bin/rm -rf "$EXTRACTDIR"
     /bin/rm -f "$SCRIPT"
     exit 1
 }}
+
+if [ "${{1:-}}" = "--install" ]; then
+    install_bundle
+    exit $?
+fi
 
 : > "$LOG"
 log "KirstGrab macOS update started"
@@ -556,37 +633,25 @@ while /bin/kill -0 "$PID" 2>/dev/null; do
     /bin/sleep 0.2
 done
 
-/bin/rm -rf "$STAGED"
-/usr/bin/ditto "$SOURCE" "$STAGED" || fail "Could not stage the new app bundle"
-if [ ! -x "$STAGED/Contents/MacOS/KirstGrab" ]; then
-    fail "Staged app bundle has no executable"
-fi
-
-/bin/rm -rf "$BACKUP"
-if [ -d "$DEST" ]; then
-    /bin/mv "$DEST" "$BACKUP" || fail "Could not back up the current app bundle"
-fi
-
-if ! /bin/mv "$STAGED" "$DEST"; then
-    fail "Could not install the new app bundle"
-fi
-
-if ! /usr/bin/codesign --verify --deep --strict "$DEST" >> "$LOG" 2>&1; then
-    /bin/rm -rf "$DEST"
-    if [ -d "$BACKUP" ]; then
-        /bin/mv "$BACKUP" "$DEST" || true
+if [ "$REQUIRES_ADMIN" = "1" ]; then
+    log "Requesting administrator permission to replace the app bundle"
+    if ! /usr/bin/osascript - "$SCRIPT" >> "$LOG" 2>&1 <<'APPLESCRIPT'
+on run argv
+    set updaterPath to item 1 of argv
+    do shell script "/bin/sh " & quoted form of updaterPath & " --install" with administrator privileges
+end run
+APPLESCRIPT
+    then
+        fail "Administrator authorization or privileged installation failed"
     fi
-    fail "Installed app bundle failed code-signature verification"
+elif ! install_bundle; then
+    fail "Could not replace the app bundle"
 fi
 
 if ! PYINSTALLER_RESET_ENVIRONMENT=1 /usr/bin/open -n "$DEST"; then
-    /bin/rm -rf "$DEST"
-    if [ -d "$BACKUP" ]; then
-        /bin/mv "$BACKUP" "$DEST" || true
-    fi
     fail "Could not restart KirstGrab"
 fi
-log "Update completed; backup retained at $BACKUP"
+log "Update completed successfully"
 /bin/rm -f "$TEMPZIP"
 /bin/rm -rf "$EXTRACTDIR"
 /bin/rm -f "$SCRIPT"
@@ -595,12 +660,17 @@ log "Update completed; backup retained at $BACKUP"
             file.write(script)
         os.chmod(helper_script, 0o700)
 
-    def launch_macos_updater(helper_script, temp_zip, extract_dir):
+    def launch_macos_updater(helper_script, temp_zip, extract_dir, requires_admin):
         def launch_and_close():
             try:
+                permission_note = ""
+                if requires_admin:
+                    permission_note = "\nmacOS will ask for administrator permission."
                 messagebox.showinfo(
                     "Update Ready",
-                    "Update downloaded successfully.\nKirstGrab will close and restart after the app bundle is replaced."
+                    "Update downloaded successfully.\n"
+                    "KirstGrab will close and restart after the app bundle is replaced."
+                    f"{permission_note}"
                 )
                 child_env = clean_subprocess_environment()
                 child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
@@ -723,6 +793,7 @@ log "Update completed; backup retained at $BACKUP"
                 temp_exe = sorted(exe_files)[0]
                 current_exe = sys.executable
                 backup_path = current_exe + ".backup"
+                requires_admin = not directory_is_writable(os.path.dirname(current_exe))
                 batch_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.bat")
                 write_windows_updater(
                     batch_script,
@@ -735,7 +806,12 @@ log "Update completed; backup retained at $BACKUP"
                 )
                 set_progress("Update ready. Restarting application...", 100)
                 updater_handoff = True
-                launch_windows_updater(batch_script, temp_zip, extract_dir)
+                launch_windows_updater(
+                    batch_script,
+                    temp_zip,
+                    extract_dir,
+                    requires_admin,
+                )
             elif sys.platform == "darwin":
                 source_app = find_macos_app_in_tree(extract_dir)
                 destination_app = find_macos_app_bundle(sys.executable)
@@ -783,12 +859,14 @@ log "Update completed; backup retained at $BACKUP"
                     )
 
                 destination_parent = os.path.dirname(destination_app)
-                if not os.access(destination_parent, os.W_OK):
+                if macos_app_requires_manual_replacement(destination_app):
                     show_manual_update(
-                        "The folder containing KirstGrab.app is not writable. "
-                        "Download the matching archive and replace KirstGrab.app in Applications manually."
+                        "KirstGrab is running from a read-only or translocated location. "
+                        "Download the matching archive, move KirstGrab.app to Applications, "
+                        "and open it there once before using automatic updates."
                     )
                     return
+                requires_admin = not directory_is_writable(destination_parent)
 
                 helper_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.sh")
                 write_macos_updater(
@@ -798,10 +876,16 @@ log "Update completed; backup retained at $BACKUP"
                     destination_app,
                     temp_zip,
                     extract_dir,
+                    requires_admin,
                 )
                 set_progress("Update ready. Restarting application...", 100)
                 updater_handoff = True
-                launch_macos_updater(helper_script, temp_zip, extract_dir)
+                launch_macos_updater(
+                    helper_script,
+                    temp_zip,
+                    extract_dir,
+                    requires_admin,
+                )
             else:
                 show_update_error("Automatic updates are not supported on this platform.")
 

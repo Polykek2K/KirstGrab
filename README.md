@@ -23,7 +23,7 @@ KirstGrab — графический загрузчик видео и аудио
 - FFmpeg (`brew install ffmpeg`; скрипт установит его при необходимости).
 
 ```bash
-bash ./build-local-macos.sh --version 1.6.1
+bash ./build-local-macos.sh --version 1.6.2
 ```
 
 Результаты:

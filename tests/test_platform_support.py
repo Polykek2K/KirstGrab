@@ -6,8 +6,10 @@ from kirstgrab_platform import (
     bundled_binary_paths,
     clean_subprocess_environment,
     cookies_file_path,
+    directory_is_writable,
     find_macos_app_bundle,
     find_macos_app_in_tree,
+    macos_app_requires_manual_replacement,
     normalize_architecture,
     release_platform_key,
     select_release_asset,
@@ -81,6 +83,21 @@ class PlatformSupportTests(unittest.TestCase):
         self.assertEqual(
             path,
             r"C:\Users\tester\AppData\Roaming\KirstGrab\cookies.txt",
+        )
+
+    def test_directory_writability_uses_a_real_file_probe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertTrue(directory_is_writable(directory))
+        self.assertFalse(directory_is_writable(os.path.join(directory, "missing")))
+
+    def test_translocated_macos_app_requires_manual_replacement(self):
+        app_path = (
+            "/private/var/folders/ab/cd/T/AppTranslocation/"
+            "123/d/KirstGrab.app"
+        )
+        self.assertTrue(macos_app_requires_manual_replacement(app_path))
+        self.assertFalse(
+            macos_app_requires_manual_replacement("/Applications/KirstGrab.app")
         )
 
     def test_finds_current_and_extracted_app_bundle(self):

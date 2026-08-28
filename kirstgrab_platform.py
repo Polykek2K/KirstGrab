@@ -11,6 +11,7 @@ import ntpath
 import platform as platform_module
 import posixpath
 import sys
+import tempfile
 from pathlib import PurePosixPath
 from typing import Iterable, Mapping, Optional
 
@@ -162,6 +163,43 @@ def cookies_file_path(**kwargs: object) -> str:
     family = platform_family(kwargs.get("platform_name"))
     path_module = ntpath if family == "windows" else posixpath
     return path_module.join(user_data_directory(**kwargs), "cookies.txt")
+
+
+def directory_is_writable(directory: str) -> bool:
+    """Check real create/delete access instead of trusting permission bits alone."""
+
+    probe_path = None
+    try:
+        descriptor, probe_path = tempfile.mkstemp(
+            prefix=".kirstgrab-update-",
+            dir=directory,
+        )
+        os.close(descriptor)
+        os.unlink(probe_path)
+        return True
+    except OSError:
+        if probe_path:
+            try:
+                os.unlink(probe_path)
+            except OSError:
+                pass
+        return False
+
+
+def macos_app_requires_manual_replacement(app_path: str) -> bool:
+    """Return whether an app lives on a location that cannot be updated in place."""
+
+    normalized = posixpath.normpath(app_path)
+    lowered = normalized.lower()
+    if "/apptranslocation/" in lowered:
+        return True
+
+    parent = posixpath.dirname(normalized)
+    try:
+        filesystem_flags = os.statvfs(parent).f_flag
+    except (AttributeError, OSError):
+        return False
+    return bool(filesystem_flags & getattr(os, "ST_RDONLY", 1))
 
 
 def find_macos_app_bundle(executable_path: str) -> Optional[str]:
