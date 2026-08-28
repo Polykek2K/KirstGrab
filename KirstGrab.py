@@ -133,7 +133,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.6.4"
+CURRENT_VERSION = "1.6.5"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -415,6 +415,7 @@ set "_MEIPASS2="
 set "PYINSTALLER_RESET_ENVIRONMENT=1"
 echo Waiting for process %PID% to exit... >> "%LOG%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 1500" >> "%LOG%" 2>&1
+echo Process %PID% exited; preparing replacement. >> "%LOG%"
 
 if not exist "%SOURCE%" (
     echo ERROR: New executable not found: %SOURCE% >> "%LOG%"
@@ -492,10 +493,13 @@ exit /b 1
                 creationflags = 0
                 if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
                     creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
-                if hasattr(subprocess, "DETACHED_PROCESS"):
-                    creationflags |= subprocess.DETACHED_PROCESS
                 if hasattr(subprocess, "CREATE_NO_WINDOW"):
                     creationflags |= subprocess.CREATE_NO_WINDOW
+                creationflags |= getattr(
+                    subprocess,
+                    "CREATE_BREAKAWAY_FROM_JOB",
+                    0x01000000,
+                )
 
                 child_env = clean_subprocess_environment()
                 child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
@@ -514,12 +518,54 @@ exit /b 1
                     if result <= 32:
                         raise OSError(f"Administrator launch failed with code {result}")
                 else:
-                    subprocess.Popen(
-                        command,
-                        close_fds=True,
-                        creationflags=creationflags,
-                        env=child_env,
-                    )
+                    try:
+                        subprocess.Popen(
+                            command,
+                            close_fds=True,
+                            creationflags=creationflags,
+                            env=child_env,
+                        )
+                    except OSError as breakaway_error:
+                        broker_env = child_env.copy()
+                        broker_env["KIRSTGRAB_UPDATER_COMMAND"] = (
+                            subprocess.list2cmdline(command)
+                        )
+                        broker_command = [
+                            "powershell.exe",
+                            "-NoProfile",
+                            "-NonInteractive",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-Command",
+                            "$result = Invoke-CimMethod -ClassName Win32_Process "
+                            "-MethodName Create -Arguments "
+                            "@{CommandLine=$env:KIRSTGRAB_UPDATER_COMMAND}; "
+                            "if ($null -eq $result -or $result.ReturnValue -ne 0) "
+                            "{ throw ('Win32_Process.Create failed: ' + "
+                            "$result.ReturnValue) }",
+                        ]
+                        broker_flags = getattr(
+                            subprocess,
+                            "CREATE_NO_WINDOW",
+                            0x08000000,
+                        )
+                        try:
+                            subprocess.run(
+                                broker_command,
+                                check=True,
+                                timeout=20,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                creationflags=broker_flags,
+                                env=broker_env,
+                            )
+                        except Exception as broker_error:
+                            raise OSError(
+                                "Could not detach the Windows updater "
+                                f"(breakaway: {breakaway_error}; "
+                                f"broker: {broker_error})"
+                            ) from broker_error
 
                 try:
                     dialog.grab_release()
