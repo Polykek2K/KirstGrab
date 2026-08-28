@@ -4,6 +4,7 @@ import unittest
 
 from kirstgrab_platform import (
     bundled_binary_paths,
+    clean_subprocess_environment,
     cookies_file_path,
     find_macos_app_bundle,
     find_macos_app_in_tree,
@@ -14,6 +15,20 @@ from kirstgrab_platform import (
 
 
 class PlatformSupportTests(unittest.TestCase):
+    def test_subprocess_environment_drops_pyinstaller_process_state(self):
+        original = {
+            "PATH": r"C:\Windows\System32",
+            "_MEIPASS2": r"C:\Temp\_MEI-old",
+            "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI-new",
+            "_PYI_ARCHIVE_FILE": r"C:\Apps\KirstGrab.exe",
+            "_PYI_PARENT_PROCESS_LEVEL": "1",
+        }
+
+        cleaned = clean_subprocess_environment(original, platform_name="win32")
+
+        self.assertEqual(cleaned, {"PATH": r"C:\Windows\System32"})
+        self.assertIn("_PYI_ARCHIVE_FILE", original)
+
     def test_architecture_aliases_are_normalized(self):
         self.assertEqual(normalize_architecture("AMD64"), "x86_64")
         self.assertEqual(normalize_architecture("aarch64"), "arm64")

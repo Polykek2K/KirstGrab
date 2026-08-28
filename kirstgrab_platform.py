@@ -40,6 +40,41 @@ def platform_family(platform_name: Optional[str] = None) -> str:
     return value
 
 
+def clean_subprocess_environment(
+    environ: Optional[Mapping[str, str]] = None,
+    platform_name: Optional[str] = None,
+    bundle_root: Optional[str] = None,
+) -> dict[str, str]:
+    """Return an environment safe for independent child processes.
+
+    PyInstaller's private variables describe the current onefile process tree.
+    Passing them through an external shell or to another frozen executable can
+    make the new process look like a worker of the current executable and trip
+    the bootloader's parent-process security validation.
+    """
+
+    environment = dict(os.environ if environ is None else environ)
+    for variable in tuple(environment):
+        if variable == "_MEIPASS2" or variable.startswith("_PYI_"):
+            environment.pop(variable, None)
+
+    active_bundle_root = getattr(sys, "_MEIPASS", None) if bundle_root is None else bundle_root
+    if platform_family(platform_name) == "macos" and active_bundle_root:
+        for variable in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+            entries = environment.get(variable, "").split(os.pathsep)
+            entries = [
+                entry
+                for entry in entries
+                if entry and not os.path.abspath(entry).startswith(active_bundle_root)
+            ]
+            if entries:
+                environment[variable] = os.pathsep.join(entries)
+            else:
+                environment.pop(variable, None)
+
+    return environment
+
+
 def release_platform_key(
     platform_name: Optional[str] = None,
     machine: Optional[str] = None,

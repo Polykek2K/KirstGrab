@@ -18,6 +18,7 @@ import plistlib
 
 from kirstgrab_platform import (
     bundled_binary_paths,
+    clean_subprocess_environment,
     cookies_file_path,
     find_macos_app_bundle,
     find_macos_app_in_tree,
@@ -46,20 +47,6 @@ else:
 def resource_path(relative_path):
     base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
-
-def clean_subprocess_environment():
-    """Return an environment safe for launching bundled helper programs."""
-    environment = os.environ.copy()
-    bundle_root = getattr(sys, "_MEIPASS", None)
-    if sys.platform == "darwin" and bundle_root:
-        for variable in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
-            entries = environment.get(variable, "").split(os.pathsep)
-            entries = [entry for entry in entries if entry and not os.path.abspath(entry).startswith(bundle_root)]
-            if entries:
-                environment[variable] = os.pathsep.join(entries)
-            else:
-                environment.pop(variable, None)
-    return environment
 
 def macos_codesign_team_identifier(app_path):
     """Return the signing team for an app, or None for an ad-hoc signature."""
@@ -144,7 +131,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.6.0"
+CURRENT_VERSION = "1.6.1"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -393,6 +380,8 @@ if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
 
 for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
 echo Starting updated KirstGrab... >> "%LOG%"
+for /F "tokens=1 delims==" %%V in ('set _PYI_ 2^>nul') do set "%%V="
+set "_MEIPASS2="
 set "PYINSTALLER_RESET_ENVIRONMENT=1"
 start "" /D "%DESTDIR%" "%DEST%"
 
@@ -404,6 +393,8 @@ exit /b 0
 if not exist "%DEST%" if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
 if not exist "%DEST%" goto cleanup_failed_update
 for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
+for /F "tokens=1 delims==" %%V in ('set _PYI_ 2^>nul') do set "%%V="
+set "_MEIPASS2="
 set "PYINSTALLER_RESET_ENVIRONMENT=1"
 start "" /D "%DESTDIR%" "%DEST%"
 :cleanup_failed_update
