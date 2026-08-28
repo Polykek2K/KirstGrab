@@ -159,8 +159,6 @@ jobs:
         include:
           - runner: macos-15
             architecture: arm64
-          - runner: macos-15-intel
-            architecture: x86_64
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -294,7 +292,6 @@ jobs:
         run: |
           test -f "release-files/release-$RELEASE_VERSION.zip"
           test -f "release-files/KirstGrab-$RELEASE_VERSION-macos-arm64.zip"
-          test -f "release-files/KirstGrab-$RELEASE_VERSION-macos-x86_64.zip"
           sha256sum release-files/*.zip
 
       - name: Create Git tag
@@ -318,4 +315,3 @@ jobs:
           files: |
             release-files/release-${{ inputs.version }}.zip
             release-files/KirstGrab-${{ inputs.version }}-macos-arm64.zip
-            release-files/KirstGrab-${{ inputs.version }}-macos-x86_64.zip

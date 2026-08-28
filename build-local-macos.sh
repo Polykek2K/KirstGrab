@@ -69,11 +69,8 @@ case "$ARCH" in
     arm64)
         DENO_ARCH=aarch64
         ;;
-    x86_64)
-        DENO_ARCH=x86_64
-        ;;
     *)
-        echo "Unsupported macOS architecture: $ARCH" >&2
+        echo "Unsupported macOS architecture: $ARCH (only arm64 is supported)" >&2
         exit 1
         ;;
 esac

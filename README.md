@@ -1,13 +1,12 @@
 # KirstGrab
 
-KirstGrab — графический загрузчик видео и аудио на базе `yt-dlp`. Проект поддерживает Windows x86_64, macOS Apple Silicon (`arm64`) и macOS Intel (`x86_64`).
+KirstGrab — графический загрузчик видео и аудио на базе `yt-dlp`. Проект поддерживает Windows x86_64 и macOS Apple Silicon (`arm64`).
 
 ## macOS
 
-Готовый релиз содержит два отдельных архива:
+Готовый релиз содержит отдельный архив для Apple Silicon:
 
-- `KirstGrab-<version>-macos-arm64.zip` — Mac с Apple Silicon;
-- `KirstGrab-<version>-macos-x86_64.zip` — Intel Mac.
+- `KirstGrab-<version>-macos-arm64.zip` — Mac с Apple Silicon.
 
 Распакуйте подходящий архив и перенесите `KirstGrab.app` в `/Applications`. Сборки создаются на macOS 15, поэтому заявленная минимальная версия системы — macOS 15.
 
