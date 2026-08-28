@@ -278,13 +278,11 @@ set_plist_value CFBundleVersion string "$VERSION"
 set_plist_value LSMinimumSystemVersion string "$MACOSX_DEPLOYMENT_TARGET"
 set_plist_value NSHighResolutionCapable bool true
 
-if [ -n "${KIRSTGRAB_CODESIGN_IDENTITY:-}" ]; then
-    codesign --force --sign "$KIRSTGRAB_CODESIGN_IDENTITY" --options runtime --timestamp \
-        --entitlements "$SCRIPT_DIR/macos-entitlements.plist" "$APP_PATH"
-else
-    codesign --force --sign - --options runtime \
-        --entitlements "$SCRIPT_DIR/macos-entitlements.plist" "$APP_PATH"
-fi
+SIGNING_IDENTITY=${KIRSTGRAB_CODESIGN_IDENTITY:--}
+"$PYTHON_BIN" "$SCRIPT_DIR/scripts/sign_macos_bundle.py" "$APP_PATH" \
+    --identity "$SIGNING_IDENTITY" \
+    --app-entitlements "$SCRIPT_DIR/macos-entitlements.plist" \
+    --yt-dlp-entitlements "$SCRIPT_DIR/macos-yt-dlp-entitlements.plist"
 
 "$PYTHON_BIN" "$SCRIPT_DIR/scripts/verify_macos_bundle.py" \
     "$APP_PATH" --architecture "$ARCH" --version "$VERSION"

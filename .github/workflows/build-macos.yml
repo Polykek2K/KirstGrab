@@ -114,14 +114,19 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           rm -f "$CERTIFICATE_PATH"
 
-      - name: Sign verified app with Developer ID
+      - name: Sign and retest app with Developer ID
         if: ${{ inputs.publish_release }}
         env:
           KIRSTGRAB_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
-          codesign --force --deep --sign "$KIRSTGRAB_CODESIGN_IDENTITY" --options runtime --timestamp --entitlements macos-entitlements.plist dist/KirstGrab.app
-          codesign --verify --deep --strict --verbose=2 dist/KirstGrab.app
+          python scripts/sign_macos_bundle.py dist/KirstGrab.app \
+            --identity "$KIRSTGRAB_CODESIGN_IDENTITY" \
+            --app-entitlements macos-entitlements.plist \
+            --yt-dlp-entitlements macos-yt-dlp-entitlements.plist
+          python scripts/verify_macos_bundle.py dist/KirstGrab.app \
+            --architecture arm64 \
+            --version "$RELEASE_VERSION"
           ARCHIVE="KirstGrab-$RELEASE_VERSION-macos-arm64.zip"
           rm -f "$ARCHIVE"
           ditto -c -k --sequesterRsrc --keepParent dist/KirstGrab.app "$ARCHIVE"

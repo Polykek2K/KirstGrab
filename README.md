@@ -23,15 +23,15 @@ KirstGrab — графический загрузчик видео и аудио
 - FFmpeg (`brew install ffmpeg`; скрипт установит его при необходимости).
 
 ```bash
-bash ./build-local-macos.sh --version 1.6.2
+bash ./build-local-macos.sh
 ```
 
 Результаты:
 
 - `dist/KirstGrab.app`;
-- `KirstGrab-1.5.2-macos-<architecture>.zip`.
+- `KirstGrab-<version>-macos-<architecture>.zip`.
 
-Для повторной сборки с уже загруженными `yt-dlp` и Deno используйте `--skip-download`. Версия аргумента обязана совпадать с `CURRENT_VERSION`. Проверка сборки запускает все вложенные утилиты, сканирует каждый Mach-O и symlink внутри bundle, проверяет архитектуру, переносимость `otool`, `Info.plist` и code signature. В приложение добавляется `BUILD-MANIFEST.txt` с точными версиями и конфигурацией FFmpeg.
+Для повторной сборки с уже загруженными `yt-dlp` и Deno используйте `--skip-download`. Версия аргумента обязана совпадать с `CURRENT_VERSION`. Проверка сборки запускает все вложенные утилиты, сканирует каждый Mach-O и symlink внутри bundle, проверяет архитектуру, переносимость `otool`, `Info.plist` и code signature. Production workflow повторяет эти runtime-проверки после финальной Developer ID подписи и до notarization. В приложение добавляется `BUILD-MANIFEST.txt` с точными версиями и конфигурацией FFmpeg.
 
 Без `KIRSTGRAB_CODESIGN_IDENTITY` создаётся ad-hoc signed development build. Для публичного распространения задайте Developer ID Application identity, подпишите приложение и выполните notarization — workflow поддерживает это через secrets, перечисленные ниже.
 
