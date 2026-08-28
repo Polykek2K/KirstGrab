@@ -166,16 +166,27 @@ if ! command -v brew >/dev/null 2>&1; then
     echo "Homebrew is required to provide FFmpeg for the macOS bundle." >&2
     exit 1
 fi
-export HOMEBREW_NO_AUTO_UPDATE=1
+
 if ! brew list --versions ffmpeg >/dev/null 2>&1; then
     echo "==> Installing FFmpeg with Homebrew"
     brew install ffmpeg
 fi
 
 INSTALLED_FFMPEG_VERSION=$(brew list --versions ffmpeg | awk '{ print $2; exit }')
-if [ "$INSTALLED_FFMPEG_VERSION" != "$FFMPEG_VERSION" ]; then
+INSTALLED_FFMPEG_UPSTREAM_VERSION=${INSTALLED_FFMPEG_VERSION%%_*}
+if [ "$INSTALLED_FFMPEG_UPSTREAM_VERSION" != "$FFMPEG_VERSION" ] && \
+        [ "${KIRSTGRAB_REFRESH_HOMEBREW:-0}" = "1" ]; then
+    echo "==> Updating Homebrew FFmpeg $INSTALLED_FFMPEG_VERSION to $FFMPEG_VERSION"
+    brew update
+    brew upgrade ffmpeg
+    INSTALLED_FFMPEG_VERSION=$(brew list --versions ffmpeg | awk '{ print $2; exit }')
+    INSTALLED_FFMPEG_UPSTREAM_VERSION=${INSTALLED_FFMPEG_VERSION%%_*}
+fi
+
+export HOMEBREW_NO_AUTO_UPDATE=1
+if [ "$INSTALLED_FFMPEG_UPSTREAM_VERSION" != "$FFMPEG_VERSION" ]; then
     echo "Expected Homebrew FFmpeg $FFMPEG_VERSION, found $INSTALLED_FFMPEG_VERSION." >&2
-    echo "Update the pinned FFmpeg version and notices as one reviewed change." >&2
+    echo "Run brew update && brew upgrade ffmpeg, or update the pinned version and notices as one reviewed change." >&2
     exit 1
 fi
 

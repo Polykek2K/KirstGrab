@@ -64,7 +64,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          python -m py_compile KirstGrab.py kirstgrab_platform.py
+          python -m py_compile KirstGrab.py kirstgrab_platform.py scripts/verify_sha256.py
           python -m unittest discover -s tests -v
           python -c 'import os,re,pathlib; source=pathlib.Path("KirstGrab.py").read_text(encoding="utf-8"); actual=re.search(r"^CURRENT_VERSION = \"([^\"]+)\"", source, re.M).group(1); expected=os.environ["RELEASE_VERSION"]; assert actual == expected, f"CURRENT_VERSION={actual}, workflow version={expected}"'
 
@@ -73,11 +73,7 @@ jobs:
           $base = "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION"
           Invoke-WebRequest "$base/yt-dlp.exe" -OutFile yt-dlp.exe
           Invoke-WebRequest "$base/SHA2-256SUMS" -OutFile yt-dlp.sha256
-          $checksumLine = rg -m 1 '^[0-9a-f]{64}\s+\*?yt-dlp\.exe$' yt-dlp.sha256
-          if (-not $checksumLine) { throw 'yt-dlp checksum was not found' }
-          $expected = ($checksumLine -split '\s+')[0]
-          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath yt-dlp.exe).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw 'yt-dlp SHA-256 verification failed' }
+          python scripts/verify_sha256.py yt-dlp.exe yt-dlp.sha256 --entry yt-dlp.exe
 
       - name: Download pinned Deno
         run: |
@@ -85,11 +81,7 @@ jobs:
           $base = "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/$asset"
           Invoke-WebRequest $base -OutFile deno.zip
           Invoke-WebRequest "$base.sha256sum" -OutFile deno.sha256
-          $checksumLine = rg -m 1 '^[0-9a-f]{64}' deno.sha256
-          if (-not $checksumLine) { throw 'Deno checksum was not found' }
-          $expected = ($checksumLine -split '\s+')[0]
-          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath deno.zip).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw 'Deno SHA-256 verification failed' }
+          python scripts/verify_sha256.py deno.zip deno.sha256 --entry $asset
           Expand-Archive deno.zip deno_tmp
           New-Item -ItemType Directory -Force -Path .\deno | Out-Null
           Copy-Item deno_tmp\deno.exe .\deno\deno.exe -Force
@@ -100,17 +92,21 @@ jobs:
           $asset = $rel.assets | Where-Object { $_.name -match 'win64' -and $_.name -match 'shared' -and $_.name -match '\.zip$' } | Select-Object -First 1
           if (-not $asset) { throw 'FFmpeg win64 shared ZIP was not found' }
           if ($asset.digest -notmatch '^sha256:(?<hash>[0-9a-f]{64})$') { throw 'FFmpeg asset has no SHA-256 digest' }
+          $expectedDigest = $Matches['hash']
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
           $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath ffmpeg.zip).Hash.ToLowerInvariant()
-          if ($actual -ne $Matches.hash) { throw 'FFmpeg SHA-256 verification failed' }
+          if ($actual -ne $expectedDigest) { throw 'FFmpeg SHA-256 verification failed' }
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp
-          $ff = rg --files ffmpeg_tmp | rg -m 1 '(^|[\\/])ffmpeg\.exe$'
-          $ffp = rg --files ffmpeg_tmp | rg -m 1 '(^|[\\/])ffprobe\.exe$'
-          if (-not $ff -or -not $ffp) { throw 'FFmpeg executables were not found in the archive' }
+          $archiveRoots = @([System.IO.Directory]::GetDirectories((Resolve-Path -LiteralPath ffmpeg_tmp).Path))
+          if ($archiveRoots.Count -ne 1) { throw "Expected one FFmpeg archive root, found $($archiveRoots.Count)" }
+          $binDirectory = Join-Path $archiveRoots[0] 'bin'
+          $ff = Join-Path $binDirectory 'ffmpeg.exe'
+          $ffp = Join-Path $binDirectory 'ffprobe.exe'
+          if (-not (Test-Path -LiteralPath $ff) -or -not (Test-Path -LiteralPath $ffp)) { throw 'FFmpeg executables were not found in the archive' }
           New-Item -ItemType Directory -Force -Path .\ffmpeg | Out-Null
           Copy-Item -LiteralPath $ff -Destination .\ffmpeg\ffmpeg.exe -Force
           Copy-Item -LiteralPath $ffp -Destination .\ffmpeg\ffprobe.exe -Force
-          $dlls = @(rg --files ffmpeg_tmp -g '*.dll')
+          $dlls = @([System.IO.Directory]::GetFiles($binDirectory, '*.dll', [System.IO.SearchOption]::TopDirectoryOnly))
           if ($dlls.Count -eq 0) { throw 'FFmpeg DLL files were not found in the archive' }
           $dlls | ForEach-Object {
             Copy-Item -LiteralPath $_ -Destination .\ffmpeg\ -Force
@@ -189,6 +185,8 @@ jobs:
           test "$(uname -m)" = "${{ matrix.architecture }}"
 
       - name: Build and test ad-hoc-signed app
+        env:
+          KIRSTGRAB_REFRESH_HOMEBREW: "1"
         run: bash ./build-local-macos.sh --version "${{ inputs.version }}"
 
       - name: Require complete Apple signing configuration
