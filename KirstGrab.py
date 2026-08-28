@@ -12,6 +12,20 @@ import tempfile
 import shutil
 import zipfile
 import re
+import hashlib
+import shlex
+import plistlib
+
+from kirstgrab_platform import (
+    bundled_binary_paths,
+    cookies_file_path,
+    find_macos_app_bundle,
+    find_macos_app_in_tree,
+    release_platform_key,
+    select_release_asset,
+)
+
+MACOS_BUNDLE_IDENTIFIER = "com.polykek2k.kirstgrab"
 
 try:
     from PIL import Image, ImageTk, ImageFont
@@ -30,43 +44,73 @@ else:
     WIN32_AVAILABLE = False
 
 def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
+def clean_subprocess_environment():
+    """Return an environment safe for launching bundled helper programs."""
+    environment = os.environ.copy()
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if sys.platform == "darwin" and bundle_root:
+        for variable in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+            entries = environment.get(variable, "").split(os.pathsep)
+            entries = [entry for entry in entries if entry and not os.path.abspath(entry).startswith(bundle_root)]
+            if entries:
+                environment[variable] = os.pathsep.join(entries)
+            else:
+                environment.pop(variable, None)
+    return environment
+
+def macos_codesign_team_identifier(app_path):
+    """Return the signing team for an app, or None for an ad-hoc signature."""
+    result = subprocess.run(
+        ["/usr/bin/codesign", "-dv", "--verbose=4", app_path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    details = "\n".join((result.stdout, result.stderr))
+    match = re.search(r"^TeamIdentifier=(.+)$", details, flags=re.MULTILINE)
+    if not match:
+        return None
+    team_identifier = match.group(1).strip()
+    return None if team_identifier.lower() in {"", "not set"} else team_identifier
+
 def ensure_cookies_file(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
-        open(path, "w", encoding="utf-8").close()
+        with open(path, "w", encoding="utf-8"):
+            pass
 
 def clear_cookies_file():
     """Clear the cookies.txt file on startup"""
-    cookies_path = resource_path("cookies.txt")
+    cookies_path = cookies_file_path()
     try:
+        ensure_cookies_file(cookies_path)
         with open(cookies_path, "w", encoding="utf-8") as f:
             f.write("")  # Clear the file
     except Exception as e:
         print(f"Warning: Could not clear cookies file: {e}")
 
 def edit_cookies_file():
-    """Open cookies.txt file in notepad for editing"""
-    cookies_path = resource_path("cookies.txt")
+    """Open the writable cookies file in the platform's text editor."""
+    cookies_path = cookies_file_path()
     ensure_cookies_file(cookies_path)
-    
+
     try:
         if sys.platform.startswith("win"):
-            os.system(f'notepad.exe "{cookies_path}"')
+            subprocess.Popen(["notepad.exe", cookies_path])
         elif sys.platform.startswith("darwin"):  # macOS
-            os.system(f'open -e "{cookies_path}"')
+            subprocess.Popen(["/usr/bin/open", "-e", cookies_path])
         else:  # Linux
-            os.system(f'xdg-open "{cookies_path}"')
+            subprocess.Popen(["xdg-open", cookies_path])
     except Exception as e:
         messagebox.showerror("Error", f"Could not open cookies file: {e}")
 
 def paste_cookies():
     """Paste clipboard content to cookies.txt file"""
-    cookies_path = resource_path("cookies.txt")
+    cookies_path = cookies_file_path()
+    ensure_cookies_file(cookies_path)
     clipboard_content = None
     
     # Try Windows API first (more reliable)
@@ -100,7 +144,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.5.2"
+CURRENT_VERSION = "1.6.0"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -283,7 +327,7 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
         except tk.TclError:
             pass
 
-    def cleanup_temp_files(temp_zip, extract_dir, batch_script=None):
+    def cleanup_temp_files(temp_zip, extract_dir, helper_script=None):
         if temp_zip and os.path.exists(temp_zip):
             try:
                 os.remove(temp_zip)
@@ -291,9 +335,9 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
                 pass
         if extract_dir and os.path.exists(extract_dir):
             shutil.rmtree(extract_dir, ignore_errors=True)
-        if batch_script and os.path.exists(batch_script):
+        if helper_script and os.path.exists(helper_script):
             try:
-                os.remove(batch_script)
+                os.remove(helper_script)
             except OSError:
                 pass
 
@@ -303,7 +347,7 @@ def start_update(dialog, latest_info, progress_label, progress_bar, progress_fra
     def write_windows_updater(batch_script, current_pid, current_exe, temp_exe, temp_zip, extract_dir, backup_path):
         log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
         script = f'''@echo off
-setlocal
+setlocal EnableExtensions
 chcp 65001 >nul
 set "PID={current_pid}"
 set "SOURCE={batch_escape(temp_exe)}"
@@ -316,30 +360,31 @@ set "LOG={batch_escape(log_path)}"
 echo KirstGrab update started > "%LOG%"
 echo Waiting for process %PID% to exit... >> "%LOG%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue" >> "%LOG%" 2>&1
-timeout /t 1 /nobreak >nul
 
 if not exist "%SOURCE%" (
     echo ERROR: New executable not found: %SOURCE% >> "%LOG%"
-    exit /b 1
+    goto update_failed
 )
 
 if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
 
-if exist "%DEST%" (
-    echo Backing up current executable... >> "%LOG%"
+for /L %%A in (1,1,30) do (
+    if not exist "%DEST%" goto install_update
+    echo Backing up current executable (attempt %%A)... >> "%LOG%"
     move /Y "%DEST%" "%BACKUP%" >> "%LOG%" 2>&1
-    if errorlevel 1 (
-        echo ERROR: Could not create backup. >> "%LOG%"
-        exit /b 1
-    )
+    if not errorlevel 1 goto install_update
+    timeout /t 1 /nobreak >nul
 )
+echo ERROR: Current executable stayed locked for 30 seconds. >> "%LOG%"
+goto update_failed
 
+:install_update
 echo Installing new executable... >> "%LOG%"
 copy /Y "%SOURCE%" "%DEST%" >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo ERROR: Copy failed. Restoring backup if possible. >> "%LOG%"
     if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
-    exit /b 1
+    goto update_failed
 )
 
 if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
@@ -348,10 +393,24 @@ if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
 
 for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
 echo Starting updated KirstGrab... >> "%LOG%"
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
 start "" /D "%DESTDIR%" "%DEST%"
 
 echo Update completed successfully. >> "%LOG%"
 del /f /q "%~f0" >nul 2>&1
+exit /b 0
+
+:update_failed
+if not exist "%DEST%" if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
+if not exist "%DEST%" goto cleanup_failed_update
+for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
+start "" /D "%DESTDIR%" "%DEST%"
+:cleanup_failed_update
+if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
+if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
+del /f /q "%~f0" >nul 2>&1
+exit /b 1
 '''
         with open(batch_script, "w", encoding="utf-8") as f:
             f.write(script)
@@ -372,10 +431,13 @@ del /f /q "%~f0" >nul 2>&1
                 if hasattr(subprocess, "CREATE_NO_WINDOW"):
                     creationflags |= subprocess.CREATE_NO_WINDOW
 
+                child_env = clean_subprocess_environment()
+                child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
                 subprocess.Popen(
                     ["cmd.exe", "/c", batch_script],
                     close_fds=True,
-                    creationflags=creationflags
+                    creationflags=creationflags,
+                    env=child_env,
                 )
 
                 try:
@@ -390,6 +452,172 @@ del /f /q "%~f0" >nul 2>&1
                 set_progress("Update failed!")
         run_on_ui(launch_and_close)
 
+    def write_macos_updater(helper_script, current_pid, source_app, destination_app, temp_zip, extract_dir):
+        log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
+        quoted = {
+            "source": shlex.quote(source_app),
+            "destination": shlex.quote(destination_app),
+            "backup": shlex.quote(destination_app + ".backup"),
+            "staged": shlex.quote(destination_app + ".new"),
+            "temp_zip": shlex.quote(temp_zip),
+            "extract_dir": shlex.quote(extract_dir),
+            "log": shlex.quote(log_path),
+            "script": shlex.quote(helper_script),
+        }
+        script = f'''#!/bin/sh
+set -u
+PID={current_pid}
+SOURCE={quoted["source"]}
+DEST={quoted["destination"]}
+BACKUP={quoted["backup"]}
+STAGED={quoted["staged"]}
+TEMPZIP={quoted["temp_zip"]}
+EXTRACTDIR={quoted["extract_dir"]}
+LOG={quoted["log"]}
+SCRIPT={quoted["script"]}
+
+log() {{
+    /bin/echo "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$LOG"
+}}
+
+fail() {{
+    log "ERROR: $1"
+    /bin/rm -rf "$STAGED"
+    if [ ! -d "$DEST" ] && [ -d "$BACKUP" ]; then
+        /bin/mv "$BACKUP" "$DEST" || log "ERROR: Could not restore the previous app bundle"
+    fi
+    if [ -d "$DEST" ]; then
+        PYINSTALLER_RESET_ENVIRONMENT=1 /usr/bin/open -n "$DEST" >> "$LOG" 2>&1 || \
+            log "ERROR: Could not reopen KirstGrab after the failed update"
+    fi
+    /bin/rm -f "$TEMPZIP"
+    /bin/rm -rf "$EXTRACTDIR"
+    /bin/rm -f "$SCRIPT"
+    exit 1
+}}
+
+: > "$LOG"
+log "KirstGrab macOS update started"
+while /bin/kill -0 "$PID" 2>/dev/null; do
+    /bin/sleep 0.2
+done
+
+/bin/rm -rf "$STAGED"
+/usr/bin/ditto "$SOURCE" "$STAGED" || fail "Could not stage the new app bundle"
+if [ ! -x "$STAGED/Contents/MacOS/KirstGrab" ]; then
+    fail "Staged app bundle has no executable"
+fi
+
+/bin/rm -rf "$BACKUP"
+if [ -d "$DEST" ]; then
+    /bin/mv "$DEST" "$BACKUP" || fail "Could not back up the current app bundle"
+fi
+
+if ! /bin/mv "$STAGED" "$DEST"; then
+    fail "Could not install the new app bundle"
+fi
+
+if ! /usr/bin/codesign --verify --deep --strict "$DEST" >> "$LOG" 2>&1; then
+    /bin/rm -rf "$DEST"
+    if [ -d "$BACKUP" ]; then
+        /bin/mv "$BACKUP" "$DEST" || true
+    fi
+    fail "Installed app bundle failed code-signature verification"
+fi
+
+if ! PYINSTALLER_RESET_ENVIRONMENT=1 /usr/bin/open -n "$DEST"; then
+    /bin/rm -rf "$DEST"
+    if [ -d "$BACKUP" ]; then
+        /bin/mv "$BACKUP" "$DEST" || true
+    fi
+    fail "Could not restart KirstGrab"
+fi
+log "Update completed; backup retained at $BACKUP"
+/bin/rm -f "$TEMPZIP"
+/bin/rm -rf "$EXTRACTDIR"
+/bin/rm -f "$SCRIPT"
+'''
+        with open(helper_script, "w", encoding="utf-8", newline="\n") as file:
+            file.write(script)
+        os.chmod(helper_script, 0o700)
+
+    def launch_macos_updater(helper_script, temp_zip, extract_dir):
+        def launch_and_close():
+            try:
+                messagebox.showinfo(
+                    "Update Ready",
+                    "Update downloaded successfully.\nKirstGrab will close and restart after the app bundle is replaced."
+                )
+                child_env = clean_subprocess_environment()
+                child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+                subprocess.Popen(
+                    ["/bin/sh", helper_script],
+                    close_fds=True,
+                    start_new_session=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=child_env,
+                )
+                try:
+                    dialog.grab_release()
+                    dialog.destroy()
+                except tk.TclError:
+                    pass
+                root.after(100, close_application)
+            except Exception as error:
+                cleanup_temp_files(temp_zip, extract_dir, helper_script)
+                messagebox.showerror("Update Error", f"Failed to start updater: {error}")
+                set_progress("Update failed!")
+        run_on_ui(launch_and_close)
+
+    def show_manual_update(message):
+        release_url = latest_info.get("html_url", "")
+
+        def show_instructions():
+            messagebox.showinfo("Manual Update Required", message)
+            if release_url and sys.platform == "darwin":
+                subprocess.Popen(["/usr/bin/open", release_url])
+
+        set_progress("Manual update required")
+        run_on_ui(show_instructions)
+
+    def verify_download_digest(filepath, asset):
+        raw_digest = asset.get("digest")
+        if not raw_digest:
+            raise ValueError("Release asset has no SHA-256 digest; use a manual update")
+        digest = str(raw_digest)
+        algorithm, separator, expected = digest.partition(":")
+        if separator != ":" or algorithm.lower() != "sha256" or not expected:
+            raise ValueError(f"Unsupported release digest: {digest}")
+
+        hasher = hashlib.sha256()
+        with open(filepath, "rb") as downloaded_file:
+            for chunk in iter(lambda: downloaded_file.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        if hasher.hexdigest().lower() != expected.lower():
+            raise ValueError("Downloaded update failed SHA-256 verification")
+
+    def extract_update_archive(filepath, destination):
+        destination_root = os.path.abspath(destination)
+        with zipfile.ZipFile(filepath, "r") as archive:
+            for member in archive.infolist():
+                target = os.path.abspath(os.path.join(destination_root, member.filename))
+                if os.path.commonpath([destination_root, target]) != destination_root:
+                    raise ValueError(f"Unsafe path in update archive: {member.filename}")
+
+        if sys.platform == "darwin":
+            subprocess.run(
+                ["/usr/bin/ditto", "-x", "-k", filepath, destination],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return
+
+        with zipfile.ZipFile(filepath, "r") as archive:
+            archive.extractall(destination_root)
+
     def update_progress(percent):
         set_progress(f"Downloading update... {percent:.1f}%", percent)
     
@@ -398,65 +626,49 @@ del /f /q "%~f0" >nul 2>&1
         extract_dir = None
         updater_handoff = False
         try:
-            # Find the ZIP asset (release package)
             assets = latest_info.get('assets', [])
-            zip_asset = None
-            
-            for asset in assets:
-                if asset['name'].endswith('.zip') and 'release' in asset['name']:
-                    zip_asset = asset
-                    break
-            
+            zip_asset = select_release_asset(assets)
+
             if not zip_asset:
-                show_update_error("Could not find release package in assets!", "Error")
+                platform_key = release_platform_key()
+                show_update_error(f"Could not find a release package for {platform_key}.", "Error")
                 return
 
             if not getattr(sys, 'frozen', False):
                 show_update_error("Automatic replacement is available only in the packaged application.")
                 return
-            
-            # Download ZIP to temporary file
+
             temp_dir = tempfile.gettempdir()
             asset_name = os.path.basename(zip_asset.get('name', 'release.zip'))
             temp_zip = os.path.join(temp_dir, f"KirstGrab_update_{os.getpid()}_{asset_name}")
-            
+
             set_progress("Downloading update...", 0)
-            
-            if not download_file(zip_asset['browser_download_url'], temp_zip, update_progress):
+
+            download_url = zip_asset.get('browser_download_url', '')
+            if not download_url or not download_file(download_url, temp_zip, update_progress):
                 show_update_error("Failed to download update!", "Error")
                 return
-            
+
+            verify_download_digest(temp_zip, zip_asset)
             set_progress("Extracting update...", 100)
-            
-            # Extract the ZIP file
             extract_dir = tempfile.mkdtemp(prefix="KirstGrab_extract_")
-            
-            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
-            
-            # Find the executable in the extracted files
-            exe_files = []
-            for root, dirs, files in os.walk(extract_dir):
-                for file in files:
-                    if file.endswith('.exe') and 'KirstGrab' in file:
-                        exe_files.append(os.path.join(root, file))
-            
-            if not exe_files:
-                show_update_error("Could not find executable in release package!", "Error")
-                return
-            
-            # Use the first (and likely only) executable found
-            temp_exe = exe_files[0]
-            
+            extract_update_archive(temp_zip, extract_dir)
             set_progress("Preparing restart...", 100)
-            
-            # Running as compiled executable
-            current_exe = sys.executable
-            
-            backup_path = current_exe + ".backup"
-            
-            # On Windows, we need to use a different approach to replace the running executable
+
             if sys.platform.startswith("win"):
+                exe_files = []
+                for current_root, _directories, files in os.walk(extract_dir):
+                    for filename in files:
+                        if filename.lower().endswith('.exe') and 'kirstgrab' in filename.lower():
+                            exe_files.append(os.path.join(current_root, filename))
+
+                if not exe_files:
+                    show_update_error("Could not find KirstGrab.exe in the release package!", "Error")
+                    return
+
+                temp_exe = sorted(exe_files)[0]
+                current_exe = sys.executable
+                backup_path = current_exe + ".backup"
                 batch_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.bat")
                 write_windows_updater(
                     batch_script,
@@ -470,29 +682,77 @@ del /f /q "%~f0" >nul 2>&1
                 set_progress("Update ready. Restarting application...", 100)
                 updater_handoff = True
                 launch_windows_updater(batch_script, temp_zip, extract_dir)
+            elif sys.platform == "darwin":
+                source_app = find_macos_app_in_tree(extract_dir)
+                destination_app = find_macos_app_bundle(sys.executable)
+                if not source_app:
+                    show_update_error("Could not find KirstGrab.app in the release package!", "Error")
+                    return
+                subprocess.run(
+                    ["/usr/bin/codesign", "--verify", "--deep", "--strict", source_app],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                source_info_plist = os.path.join(source_app, "Contents", "Info.plist")
+                with open(source_info_plist, "rb") as plist_file:
+                    source_info = plistlib.load(plist_file)
+                source_bundle_identifier = source_info.get("CFBundleIdentifier")
+                if source_bundle_identifier != MACOS_BUNDLE_IDENTIFIER:
+                    raise ValueError(
+                        f"Unexpected update bundle identifier: {source_bundle_identifier!r}"
+                    )
+                expected_version = str(latest_info.get("tag_name", "")).lstrip("v")
+                source_version = str(source_info.get("CFBundleShortVersionString", "")).lstrip("v")
+                if source_version != expected_version:
+                    raise ValueError(
+                        f"Update bundle version {source_version!r} does not match release {expected_version!r}"
+                    )
+                if not destination_app:
+                    show_manual_update(
+                        "KirstGrab could not locate its current .app bundle. "
+                        "Download the matching macOS archive and replace KirstGrab.app manually."
+                    )
+                    return
+
+                subprocess.run(
+                    ["/usr/bin/codesign", "--verify", "--deep", "--strict", destination_app],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                current_team_identifier = macos_codesign_team_identifier(destination_app)
+                update_team_identifier = macos_codesign_team_identifier(source_app)
+                if current_team_identifier and update_team_identifier != current_team_identifier:
+                    raise ValueError(
+                        "The update is not signed by the same Apple Developer team as the installed app"
+                    )
+
+                destination_parent = os.path.dirname(destination_app)
+                if not os.access(destination_parent, os.W_OK):
+                    show_manual_update(
+                        "The folder containing KirstGrab.app is not writable. "
+                        "Download the matching archive and replace KirstGrab.app in Applications manually."
+                    )
+                    return
+
+                helper_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.sh")
+                write_macos_updater(
+                    helper_script,
+                    os.getpid(),
+                    source_app,
+                    destination_app,
+                    temp_zip,
+                    extract_dir,
+                )
+                set_progress("Update ready. Restarting application...", 100)
+                updater_handoff = True
+                launch_macos_updater(helper_script, temp_zip, extract_dir)
             else:
-                # For non-Windows systems, try direct replacement
-                try:
-                    shutil.copy2(temp_exe, current_exe)
-                    
-                    # Clean up temporary files
-                    os.remove(temp_zip)
-                    shutil.rmtree(extract_dir, ignore_errors=True)
-                    
-                    def restart_non_windows():
-                        messagebox.showinfo(
-                            "Update Complete",
-                            "Update completed successfully!\nThe application will now restart."
-                        )
-                        os.execv(current_exe, [current_exe] + sys.argv[1:])
-                    set_progress("Update completed! Restarting application...", 100)
-                    run_on_ui(restart_non_windows)
-                except PermissionError:
-                    # If permission denied, show error and clean up
-                    show_update_error("Permission denied! Please run the application as administrator to update.")
-                
-        except Exception as e:
-            show_update_error(f"Failed to update: {str(e)}")
+                show_update_error("Automatic updates are not supported on this platform.")
+
+        except Exception as error:
+            show_update_error(f"Failed to update: {error}")
         finally:
             if not updater_handoff:
                 cleanup_temp_files(temp_zip, extract_dir)
@@ -516,9 +776,51 @@ def check_for_updates():
     # Check for updates in background thread
     threading.Thread(target=check_thread, daemon=True).start()
 
-def find_embedded_exe(name):
-    p = resource_path(os.path.join("bin", name))
-    return p if os.path.exists(p) else name
+def find_helper_executable(relative_path, development_candidates=()):
+    executable = resource_path(relative_path)
+    candidates = [executable]
+    source_root = os.path.dirname(os.path.abspath(__file__))
+    candidates.extend(os.path.join(source_root, candidate) for candidate in development_candidates)
+
+    for candidate in candidates:
+        if os.path.isfile(candidate) and (sys.platform.startswith("win") or os.access(candidate, os.X_OK)):
+            return candidate
+
+    discovered = shutil.which(os.path.basename(relative_path))
+    return discovered
+
+def resolve_helper_executables():
+    binary_paths = bundled_binary_paths()
+    yt_name = os.path.basename(binary_paths["yt_dlp"])
+    ffmpeg_name = os.path.basename(binary_paths["ffmpeg"])
+    ffprobe_name = os.path.basename(binary_paths["ffprobe"])
+    deno_name = os.path.basename(binary_paths["deno"])
+
+    yt_development_candidates = [yt_name]
+    deno_development_candidates = [os.path.join("deno", deno_name), deno_name]
+    if sys.platform == "darwin":
+        architecture = release_platform_key().rsplit("-", 1)[-1]
+        yt_development_candidates.append(os.path.join("macos-inputs", architecture, "yt-dlp"))
+        deno_development_candidates.append(os.path.join("macos-inputs", architecture, "deno"))
+
+    return {
+        "yt_dlp": find_helper_executable(
+            binary_paths["yt_dlp"],
+            tuple(yt_development_candidates),
+        ),
+        "ffmpeg": find_helper_executable(
+            binary_paths["ffmpeg"],
+            (os.path.join("ffmpeg", ffmpeg_name), ffmpeg_name),
+        ),
+        "ffprobe": find_helper_executable(
+            binary_paths["ffprobe"],
+            (os.path.join("ffmpeg", ffprobe_name), ffprobe_name),
+        ),
+        "deno": find_helper_executable(
+            binary_paths["deno"],
+            tuple(deno_development_candidates),
+        ),
+    }
 
 def normalize_clip_time(value):
     value = value.strip().replace(",", ".")
@@ -564,11 +866,17 @@ class ImageButton(tk.Canvas):
             self.command()
 
 def build_command(url, download_path, format_choice, filename=None, clip_section=None):
-    yt = find_embedded_exe("yt-dlp.exe")
-    ffmpeg_path = resource_path(os.path.join("bin", "ffmpeg.exe"))
-    ffprobe_path = resource_path(os.path.join("bin", "ffprobe.exe"))
-    deno_path = resource_path(os.path.join("bin", "deno", "deno.exe"))
-    ffmpeg_dir = os.path.dirname(ffmpeg_path)
+    helpers = resolve_helper_executables()
+    yt = helpers["yt_dlp"]
+    ffmpeg_path = helpers["ffmpeg"]
+    ffprobe_path = helpers["ffprobe"]
+    deno_path = helpers["deno"]
+
+    if not yt:
+        expected_path = resource_path(bundled_binary_paths()["yt_dlp"])
+        raise FileNotFoundError(f"Bundled yt-dlp was not found at {expected_path}")
+
+    ffmpeg_dir = os.path.dirname(ffmpeg_path) if ffmpeg_path else None
     
     cmd = [
         yt,
@@ -586,10 +894,10 @@ def build_command(url, download_path, format_choice, filename=None, clip_section
     cmd.extend(["--extractor-args", "youtube:player_client=default,-tv_downgraded"])
     
     # Проверка наличия JS
-    if os.path.exists(deno_path):
+    if deno_path:
         cmd.extend(["--js-runtimes", f"deno:{deno_path}"])
     # Handle cookies - only use cookies.txt file
-    cookies_path = resource_path("cookies.txt")
+    cookies_path = cookies_file_path()
     ensure_cookies_file(cookies_path)
     # Only use cookies if the file is not empty
     if os.path.getsize(cookies_path) > 0:
@@ -624,7 +932,7 @@ def build_command(url, download_path, format_choice, filename=None, clip_section
         cmd.extend(["-f", "best"])
     
     # Check for ffmpeg and ffprobe
-    if os.path.exists(ffmpeg_path) and os.path.exists(ffprobe_path):
+    if ffmpeg_path and ffprobe_path:
         cmd.extend(["--ffmpeg-location", ffmpeg_dir])
         # Debug: Add ffmpeg path to output
         output_text.config(state=tk.NORMAL)
@@ -633,15 +941,19 @@ def build_command(url, download_path, format_choice, filename=None, clip_section
         output_text.config(state=tk.DISABLED)
     else:
         output_text.config(state=tk.NORMAL)
-        if not os.path.exists(ffmpeg_path):
-            output_text.insert(tk.END, f"Warning: ffmpeg not found at {ffmpeg_path}\n")
-        if not os.path.exists(ffprobe_path):
-            output_text.insert(tk.END, f"Warning: ffprobe not found at {ffprobe_path}\n")
+        if not ffmpeg_path:
+            output_text.insert(tk.END, "Warning: ffmpeg was not found\n")
+        if not ffprobe_path:
+            output_text.insert(tk.END, "Warning: ffprobe was not found\n")
         output_text.config(state=tk.DISABLED)
     return cmd
 
 def start_download(url, download_path, format_choice, filename=None, clip_section=None):
-    cmd = build_command(url, download_path, format_choice, filename, clip_section)
+    try:
+        cmd = build_command(url, download_path, format_choice, filename, clip_section)
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось подготовить загрузку: {error}")
+        return
     
     # Debug: Show the command being executed
     output_text.config(state=tk.NORMAL)
@@ -664,8 +976,11 @@ def start_download(url, download_path, format_choice, filename=None, clip_sectio
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
-            startupinfo=startupinfo
+            startupinfo=startupinfo,
+            env=clean_subprocess_environment(),
         )
     except Exception as e:
         messagebox.showerror("Ошибка", f"Не удалось запустить yt-dlp: {e}")
@@ -771,12 +1086,42 @@ def on_download_clicked():
 
     start_download(url, download_path, format_var.get(), filename, clip_section)
 
+def run_self_test():
+    """Validate packaged helper discovery without starting the GUI."""
+    commands = {
+        "yt_dlp": ["--version"],
+        "ffmpeg": ["-version"],
+        "ffprobe": ["-version"],
+        "deno": ["eval", "console.log(1 + 1)"],
+    }
+    helpers = resolve_helper_executables()
+    for helper_name, relative_path in bundled_binary_paths().items():
+        executable = helpers[helper_name]
+        if not executable:
+            raise FileNotFoundError(f"Bundled helper was not found: {relative_path}")
+        subprocess.run(
+            [executable, *commands[helper_name]],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=clean_subprocess_environment(),
+        )
+    return 0
+
+if "--self-test" in sys.argv:
+    try:
+        raise SystemExit(run_self_test())
+    except Exception as error:
+        print(f"KirstGrab self-test failed: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
 root = tk.Tk()
 root.title("KirstGrab")
 
-# Set icon before configuring the window
+# Windows uses the embedded ICO here; macOS gets its Dock/Finder icon from the app bundle.
 ico_p = resource_path("icon.ico")
-if os.path.exists(ico_p):
+if sys.platform.startswith("win") and os.path.exists(ico_p):
     try:
         root.iconbitmap(ico_p)
     except Exception:
@@ -790,16 +1135,18 @@ default_width = int(500 * 1.5)  # 750
 default_height = int(350 * 1.25)  # 437
 expanded_height = default_height + 45
 root.geometry(f"{default_width}x{default_height}")
-root.resizable(False, False)  # Disable window resizing
+root.minsize(default_width, default_height)
+root.resizable(True, True)
 default_bg = "#2c3e50"
 root.config(bg=default_bg)
 
 # Clear cookies file on startup
 clear_cookies_file()
 
-tk_custom_font = ("Arial", 12)
+system_font_family = "Helvetica" if sys.platform == "darwin" else "Arial"
+tk_custom_font = (system_font_family, 12)
 font_file = resource_path(os.path.join("fonts", "m6x11plus.ttf"))
-if os.path.exists(font_file) and PIL_AVAILABLE:
+if sys.platform != "darwin" and os.path.exists(font_file) and PIL_AVAILABLE:
     try:
         pil_font = ImageFont.truetype(font_file, size=12)
         family_name = pil_font.getname()[0]
@@ -814,7 +1161,7 @@ if os.path.exists(font_file) and PIL_AVAILABLE:
         except Exception:
             tk_custom_font = (family_name, 12)
     except Exception:
-        tk_custom_font = ("Arial", 12)
+        tk_custom_font = (system_font_family, 12)
 
 bg_photo = None
 bg_label = None
@@ -1015,14 +1362,15 @@ def handle_ctrl_a(event):
 def show_context_menu(event):
     """Show context menu with paste option"""
     try:
+        primary_modifier = "⌘" if sys.platform == "darwin" else "Ctrl+"
         context_menu = tk.Menu(root, tearoff=0, bg="#2c3e50", fg="white", font=tk_custom_font,
                               activebackground="#3498db", activeforeground="white")
-        context_menu.add_command(label="📋 Paste (Ctrl+V)", command=lambda: handle_paste(None))
+        context_menu.add_command(label=f"📋 Paste ({primary_modifier}V)", command=lambda: handle_paste(None))
         context_menu.add_separator()
         context_menu.add_command(label="✂️ Cut", command=lambda: entry.event_generate("<<Cut>>"))
         context_menu.add_command(label="📄 Copy", command=lambda: entry.event_generate("<<Copy>>"))
         context_menu.add_separator()
-        context_menu.add_command(label="🔍 Select All (Ctrl+A)", command=lambda: handle_ctrl_a(None))
+        context_menu.add_command(label=f"🔍 Select All ({primary_modifier}A)", command=lambda: handle_ctrl_a(None))
         context_menu.add_command(label="🗑️ Clear", command=lambda: entry.delete(0, tk.END))
         
         # Show context menu at cursor position
@@ -1066,6 +1414,12 @@ entry.bind("<Control-v>", handle_ctrl_v)    # Standard Ctrl+V
 entry.bind("<Control-V>", handle_ctrl_v)    # Capital V
 entry.bind("<Control-a>", handle_ctrl_a)    # Standard Ctrl+A
 entry.bind("<Control-A>", handle_ctrl_a)    # Capital A
+if sys.platform == "darwin":
+    entry.bind("<Command-v>", handle_ctrl_v)
+    entry.bind("<Command-V>", handle_ctrl_v)
+    entry.bind("<Command-a>", handle_ctrl_a)
+    entry.bind("<Command-A>", handle_ctrl_a)
+    entry.bind("<Control-Button-1>", show_context_menu)  # macOS trackpad context click
 entry.bind("<Escape>", handle_escape)       # Escape to clear
 entry.bind("<Button-2>", show_context_menu)    # Middle mouse button context menu
 entry.bind("<Button-3>", show_context_menu)    # Right mouse button context menu

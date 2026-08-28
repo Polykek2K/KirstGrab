@@ -4,89 +4,320 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., 1.0.0)'
+        description: Release version (for example, 1.6.0)
         required: true
-        default: '1.0.0'
+        default: 1.5.2
+      publish_release:
+        description: Sign, notarize, tag, and publish the release from main
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13.13"
+  PYINSTALLER_VERSION: "6.22.2"
+  PYINSTALLER_HOOKS_VERSION: "2026.7"
+  PILLOW_VERSION: "12.3.0"
+  ALTGRAPH_VERSION: "0.17.4"
+  PACKAGING_VERSION: "26.3"
+  SETUPTOOLS_VERSION: "80.9.0"
+  PEFILE_VERSION: "2024.8.26"
+  PYWIN32_CTYPES_VERSION: "0.2.3"
+  YT_DLP_VERSION: "2026.08.19"
+  DENO_VERSION: "2.8.1"
 
 jobs:
-  build:
+  validate-request:
+    name: Validate workflow request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main for publication
+        if: ${{ inputs.publish_release && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "Official releases must be dispatched from main." >&2
+          exit 1
+
+  build-windows:
+    name: Windows x86_64
+    needs: validate-request
     runs-on: windows-latest
 
     steps:
-      - name: Checkout main
+      - name: Checkout source revision
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Python deps
+      - name: Install pinned Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller pillow
+          python -m pip install --disable-pip-version-check --only-binary=:all: "pyinstaller==$env:PYINSTALLER_VERSION" "pyinstaller-hooks-contrib==$env:PYINSTALLER_HOOKS_VERSION" "pillow==$env:PILLOW_VERSION" "altgraph==$env:ALTGRAPH_VERSION" "packaging==$env:PACKAGING_VERSION" "setuptools==$env:SETUPTOOLS_VERSION" "pefile==$env:PEFILE_VERSION" "pywin32-ctypes==$env:PYWIN32_CTYPES_VERSION"
 
-      - name: Download latest yt-dlp.exe
+      - name: Validate source and version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest' -Headers @{Accept='application/vnd.github+json'}
-          $asset = $rel.assets | Where-Object { $_.name -like '*yt-dlp.exe' } | Select-Object -First 1
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'yt-dlp.exe'
+          python -m py_compile KirstGrab.py kirstgrab_platform.py
+          python -m unittest discover -s tests -v
+          python -c 'import os,re,pathlib; source=pathlib.Path("KirstGrab.py").read_text(encoding="utf-8"); actual=re.search(r"^CURRENT_VERSION = \"([^\"]+)\"", source, re.M).group(1); expected=os.environ["RELEASE_VERSION"]; assert actual == expected, f"CURRENT_VERSION={actual}, workflow version={expected}"'
 
-      - name: Download Deno (portable)
+      - name: Download pinned yt-dlp
         run: |
-          Invoke-WebRequest https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip -OutFile deno.zip
+          $base = "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION"
+          Invoke-WebRequest "$base/yt-dlp.exe" -OutFile yt-dlp.exe
+          Invoke-WebRequest "$base/SHA2-256SUMS" -OutFile yt-dlp.sha256
+          $checksumLine = rg -m 1 '^[0-9a-f]{64}\s+\*?yt-dlp\.exe$' yt-dlp.sha256
+          if (-not $checksumLine) { throw 'yt-dlp checksum was not found' }
+          $expected = ($checksumLine -split '\s+')[0]
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath yt-dlp.exe).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'yt-dlp SHA-256 verification failed' }
+
+      - name: Download pinned Deno
+        run: |
+          $asset = 'deno-x86_64-pc-windows-msvc.zip'
+          $base = "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/$asset"
+          Invoke-WebRequest $base -OutFile deno.zip
+          Invoke-WebRequest "$base.sha256sum" -OutFile deno.sha256
+          $checksumLine = rg -m 1 '^[0-9a-f]{64}' deno.sha256
+          if (-not $checksumLine) { throw 'Deno checksum was not found' }
+          $expected = ($checksumLine -split '\s+')[0]
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath deno.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Deno SHA-256 verification failed' }
           Expand-Archive deno.zip deno_tmp
           New-Item -ItemType Directory -Force -Path .\deno | Out-Null
-          Copy-Item deno_tmp\deno.exe .\deno\ -Force
+          Copy-Item deno_tmp\deno.exe .\deno\deno.exe -Force
 
-      - name: Download latest ffmpeg (BtbN builds)
+      - name: Download FFmpeg
         run: |
           $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers @{Accept='application/vnd.github+json'}
-          $asset = $rel.assets | Where-Object { $_.name -match 'win64' -and $_.name -match '\.zip$' } | Select-Object -First 1
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'ffmpeg.zip'
+          $asset = $rel.assets | Where-Object { $_.name -match 'win64' -and $_.name -match 'shared' -and $_.name -match '\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw 'FFmpeg win64 shared ZIP was not found' }
+          if ($asset.digest -notmatch '^sha256:(?<hash>[0-9a-f]{64})$') { throw 'FFmpeg asset has no SHA-256 digest' }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath ffmpeg.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $Matches.hash) { throw 'FFmpeg SHA-256 verification failed' }
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp
-          $ff = Get-ChildItem -Path ffmpeg_tmp -Filter ffmpeg.exe -Recurse | Select-Object -First 1
-          $ffp = Get-ChildItem -Path ffmpeg_tmp -Filter ffprobe.exe -Recurse | Select-Object -First 1
+          $ff = rg --files ffmpeg_tmp | rg -m 1 '(^|[\\/])ffmpeg\.exe$'
+          $ffp = rg --files ffmpeg_tmp | rg -m 1 '(^|[\\/])ffprobe\.exe$'
+          if (-not $ff -or -not $ffp) { throw 'FFmpeg executables were not found in the archive' }
           New-Item -ItemType Directory -Force -Path .\ffmpeg | Out-Null
-          Copy-Item $ff.FullName -Destination .\ffmpeg\ffmpeg.exe -Force
-          Copy-Item $ffp.FullName -Destination .\ffmpeg\ffprobe.exe -Force
-          # Copy all required DLL files
-          $dlls = Get-ChildItem -Path ffmpeg_tmp -Filter "*.dll" -Recurse
-          foreach ($dll in $dlls) {
-            Copy-Item $dll.FullName -Destination .\ffmpeg\ -Force
+          Copy-Item -LiteralPath $ff -Destination .\ffmpeg\ffmpeg.exe -Force
+          Copy-Item -LiteralPath $ffp -Destination .\ffmpeg\ffprobe.exe -Force
+          $dlls = @(rg --files ffmpeg_tmp -g '*.dll')
+          if ($dlls.Count -eq 0) { throw 'FFmpeg DLL files were not found in the archive' }
+          $dlls | ForEach-Object {
+            Copy-Item -LiteralPath $_ -Destination .\ffmpeg\ -Force
           }
 
-      - name: Build EXE with PyInstaller (embed resources/binaries)
+      - name: Build executable
         run: |
-          pyinstaller -F --windowed KirstGrab.py --distpath dist --workpath build --noconfirm `
-            --icon 'icon.ico' `
-            --add-data 'images/background.png;images' `
-            --add-data 'fonts/m6x11plus.ttf;fonts' `
-            --add-data 'icon.ico;.' `
-            --add-data 'cookies.txt;.' `
-            --add-binary 'yt-dlp.exe;bin' `
-            --add-binary 'ffmpeg\ffmpeg.exe;bin' `
-            --add-binary 'ffmpeg\ffprobe.exe;bin' `
-            --add-binary 'ffmpeg\*.dll;bin' `
-            --add-binary 'deno\deno.exe;bin\deno'
+          $arguments = @(
+            '-F', '--windowed', 'KirstGrab.py',
+            '--distpath', 'dist',
+            '--workpath', 'build',
+            '--noconfirm',
+            '--icon', 'icon.ico',
+            '--add-data', 'images/background.png;images',
+            '--add-data', 'fonts/m6x11plus.ttf;fonts',
+            '--add-data', 'icon.ico;.',
+            '--add-data', 'LICENSE;.',
+            '--add-data', 'THIRD_PARTY_NOTICES.md;.',
+            '--add-binary', 'yt-dlp.exe;bin',
+            '--add-binary', 'ffmpeg\ffmpeg.exe;bin',
+            '--add-binary', 'ffmpeg\ffprobe.exe;bin',
+            '--add-binary', 'ffmpeg\*.dll;bin',
+            '--add-binary', 'deno\deno.exe;bin\deno'
+          )
+          & pyinstaller $arguments
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
+          & .\dist\KirstGrab.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "KirstGrab self-test failed with exit code $LASTEXITCODE" }
 
-      - name: Prepare archive
+      - name: Prepare Windows archive
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          $exe = Get-ChildItem -Path dist -Filter *.exe -Recurse | Select-Object -First 1
-          if (-not $exe) { throw "Executable not found in dist/" }
-          Compress-Archive -Path $exe.FullName -DestinationPath release-${{ github.event.inputs.version }}.zip -Force
+          $exe = Get-Item -LiteralPath dist\KirstGrab.exe
+          Compress-Archive -Path $exe.FullName,LICENSE,THIRD_PARTY_NOTICES.md -DestinationPath "release-$env:RELEASE_VERSION.zip" -Force
+
+      - name: Upload Windows archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x86_64
+          path: release-${{ inputs.version }}.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS ${{ matrix.architecture }}
+    needs: validate-request
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout source revision
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate source and version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python -m py_compile KirstGrab.py kirstgrab_platform.py scripts/verify_macos_bundle.py
+          python -m unittest discover -s tests -v
+          python -c 'import os,re,pathlib; source=pathlib.Path("KirstGrab.py").read_text(encoding="utf-8"); actual=re.search(r"^CURRENT_VERSION = \"([^\"]+)\"", source, re.M).group(1); expected=os.environ["RELEASE_VERSION"]; assert actual == expected, f"CURRENT_VERSION={actual}, workflow version={expected}"'
+          python -c 'import tkinter; print(f"Tk {tkinter.TkVersion}")'
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+
+      - name: Build and test ad-hoc-signed app
+        run: bash ./build-local-macos.sh --version "${{ inputs.version }}"
+
+      - name: Require complete Apple signing configuration
+        if: ${{ inputs.publish_release }}
+        env:
+          SIGNING_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: |
+          test -n "$SIGNING_IDENTITY"
+          test -n "$CERTIFICATE_BASE64"
+          test -n "$CERTIFICATE_PASSWORD"
+          test -n "$NOTARY_APPLE_ID"
+          test -n "$NOTARY_PASSWORD"
+          test -n "$NOTARY_TEAM_ID"
+
+      - name: Import Developer ID certificate
+        if: ${{ inputs.publish_release }}
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/kirstgrab-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          CERTIFICATE_PATH="$RUNNER_TEMP/kirstgrab-certificate.p12"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -f pkcs12 -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm -f "$CERTIFICATE_PATH"
+
+      - name: Sign verified app with Developer ID
+        if: ${{ inputs.publish_release }}
+        env:
+          KIRSTGRAB_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          codesign --force --deep --sign "$KIRSTGRAB_CODESIGN_IDENTITY" --options runtime --timestamp --entitlements macos-entitlements.plist dist/KirstGrab.app
+          codesign --verify --deep --strict --verbose=2 dist/KirstGrab.app
+          ARCHIVE="KirstGrab-$RELEASE_VERSION-macos-${{ matrix.architecture }}.zip"
+          rm -f "$ARCHIVE"
+          ditto -c -k --sequesterRsrc --keepParent dist/KirstGrab.app "$ARCHIVE"
+
+      - name: Notarize and staple app
+        if: ${{ inputs.publish_release }}
+        env:
+          APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          ARCHIVE="KirstGrab-$RELEASE_VERSION-macos-${{ matrix.architecture }}.zip"
+          xcrun notarytool submit "$ARCHIVE" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple dist/KirstGrab.app
+          xcrun stapler validate dist/KirstGrab.app
+          spctl --assess --type execute --verbose=4 dist/KirstGrab.app
+          rm -f "$ARCHIVE"
+          ditto -c -k --sequesterRsrc --keepParent dist/KirstGrab.app "$ARCHIVE"
+
+      - name: Remove signing keychain
+        if: ${{ always() && inputs.publish_release }}
+        run: |
+          security delete-keychain "$RUNNER_TEMP/kirstgrab-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/kirstgrab-certificate.p12"
+
+      - name: Upload macOS archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.architecture }}
+          path: KirstGrab-${{ inputs.version }}-macos-${{ matrix.architecture }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: ${{ inputs.publish_release }}
+    needs:
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release revision
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-files
+          merge-multiple: true
+
+      - name: Verify release set
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          test -f "release-files/release-$RELEASE_VERSION.zip"
+          test -f "release-files/KirstGrab-$RELEASE_VERSION-macos-arm64.zip"
+          test -f "release-files/KirstGrab-$RELEASE_VERSION-macos-x86_64.zip"
+          sha256sum release-files/*.zip
 
       - name: Create Git tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          git tag ${{ github.event.inputs.version }}
-          git push origin ${{ github.event.inputs.version }}
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git rev-parse "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_VERSION already exists" >&2
+            exit 1
+          fi
+          git tag "$RELEASE_VERSION"
+          git push origin "$RELEASE_VERSION"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: Release ${{ github.event.inputs.version }}
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
           files: |
-            release-${{ github.event.inputs.version }}.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            release-files/release-${{ inputs.version }}.zip
+            release-files/KirstGrab-${{ inputs.version }}-macos-arm64.zip
+            release-files/KirstGrab-${{ inputs.version }}-macos-x86_64.zip
