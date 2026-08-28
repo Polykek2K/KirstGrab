@@ -13,17 +13,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.13.13"
-  PYINSTALLER_VERSION: "6.22.2"
-  PYINSTALLER_HOOKS_VERSION: "2026.7"
-  PILLOW_VERSION: "12.3.0"
-  ALTGRAPH_VERSION: "0.17.4"
-  PACKAGING_VERSION: "26.3"
-  SETUPTOOLS_VERSION: "80.9.0"
-  PEFILE_VERSION: "2024.8.26"
-  PYWIN32_CTYPES_VERSION: "0.2.3"
-  YT_DLP_VERSION: "2026.08.19"
-  DENO_VERSION: "2.8.1"
+  PYTHON_VERSION: "3.13"
 
 jobs:
   build:
@@ -53,38 +43,54 @@ jobs:
           if ($releaseVersion -ne $sourceVersion) { throw "Requested version $releaseVersion does not match CURRENT_VERSION $sourceVersion" }
           "value=$releaseVersion" >> $env:GITHUB_OUTPUT
 
-      - name: Install pinned Python dependencies
+      - name: Install latest Python build dependencies
         run: |
-          python -m pip install --disable-pip-version-check --only-binary=:all: "pyinstaller==$env:PYINSTALLER_VERSION" "pyinstaller-hooks-contrib==$env:PYINSTALLER_HOOKS_VERSION" "pillow==$env:PILLOW_VERSION" "altgraph==$env:ALTGRAPH_VERSION" "packaging==$env:PACKAGING_VERSION" "setuptools==$env:SETUPTOOLS_VERSION" "pefile==$env:PEFILE_VERSION" "pywin32-ctypes==$env:PYWIN32_CTYPES_VERSION"
+          python -m pip install --upgrade --disable-pip-version-check --only-binary=:all: pyinstaller pyinstaller-hooks-contrib pillow
 
       - name: Validate source
         run: |
           python -m py_compile KirstGrab.py kirstgrab_platform.py scripts/verify_sha256.py
           python -m unittest discover -s tests -v
 
-      - name: Download pinned yt-dlp
+      - name: Download latest yt-dlp
         run: |
-          $base = "https://github.com/yt-dlp/yt-dlp/releases/download/$env:YT_DLP_VERSION"
+          $base = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
           Invoke-WebRequest "$base/yt-dlp.exe" -OutFile yt-dlp.exe
           Invoke-WebRequest "$base/SHA2-256SUMS" -OutFile yt-dlp.sha256
           python scripts/verify_sha256.py yt-dlp.exe yt-dlp.sha256 --entry yt-dlp.exe
+          $versionOutput = @(& .\yt-dlp.exe --version)
+          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0) { throw 'Could not read the downloaded yt-dlp version' }
+          "KIRSTGRAB_YT_DLP_VERSION=$($versionOutput[0].Trim())" >> $env:GITHUB_ENV
 
-      - name: Download pinned Deno
+      - name: Download latest Deno
         run: |
           $asset = 'deno-x86_64-pc-windows-msvc.zip'
-          $base = "https://github.com/denoland/deno/releases/download/v$env:DENO_VERSION/$asset"
-          Invoke-WebRequest $base -OutFile deno.zip
-          Invoke-WebRequest "$base.sha256sum" -OutFile deno.sha256
+          $base = 'https://github.com/denoland/deno/releases/latest/download'
+          Invoke-WebRequest "$base/$asset" -OutFile deno.zip
+          Invoke-WebRequest "$base/$asset.sha256sum" -OutFile deno.sha256
           python scripts/verify_sha256.py deno.zip deno.sha256 --entry $asset
           Expand-Archive deno.zip deno_tmp
           New-Item -ItemType Directory -Force -Path .\deno | Out-Null
           Copy-Item deno_tmp\deno.exe .\deno\deno.exe -Force
+          $versionOutput = @(& .\deno\deno.exe --version)
+          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0) { throw 'Could not read the downloaded Deno version' }
+          $version = ($versionOutput[0] -replace '^deno\s+', '').Trim()
+          "KIRSTGRAB_DENO_VERSION=$version" >> $env:GITHUB_ENV
 
-      - name: Download FFmpeg
+      - name: Download latest FFmpeg
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers @{Accept='application/vnd.github+json'}
-          $asset = $rel.assets | Where-Object { $_.name -match 'win64' -and $_.name -match 'shared' -and $_.name -match '\.zip$' } | Select-Object -First 1
-          if (-not $asset) { throw 'FFmpeg win64 shared ZIP was not found' }
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -Headers $headers
+          $assetName = 'ffmpeg-master-latest-win64-gpl-shared.zip'
+          $matchingAssets = @($rel.assets | Where-Object { $_.name -eq $assetName })
+          if ($matchingAssets.Count -ne 1) { throw "Expected one FFmpeg asset named $assetName, found $($matchingAssets.Count)" }
+          $asset = $matchingAssets[0]
           if ($asset.digest -notmatch '^sha256:(?<hash>[0-9a-f]{64})$') { throw 'FFmpeg asset has no SHA-256 digest' }
           $expectedDigest = $Matches['hash']
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
@@ -105,6 +111,34 @@ jobs:
           $dlls | ForEach-Object {
             Copy-Item -LiteralPath $_ -Destination .\ffmpeg\ -Force
           }
+          $versionOutput = @(& .\ffmpeg\ffmpeg.exe -version)
+          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0) { throw 'Could not read the downloaded FFmpeg version' }
+          "KIRSTGRAB_FFMPEG_VERSION=$($versionOutput[0].Trim())" >> $env:GITHUB_ENV
+          "KIRSTGRAB_FFMPEG_RELEASE=$($rel.tag_name)" >> $env:GITHUB_ENV
+
+      - name: Record resolved build versions
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $pythonVersion = python -c 'import platform; print(platform.python_version())'
+          $pyinstallerVersion = python -c 'import PyInstaller; print(PyInstaller.__version__)'
+          $pillowVersion = python -c 'import PIL; print(PIL.__version__)'
+          @(
+            "KirstGrab=$env:RELEASE_VERSION"
+            'target=Windows-x86_64'
+            "python=$pythonVersion"
+            "pyinstaller=$pyinstallerVersion"
+            "pillow=$pillowVersion"
+            "yt-dlp=$env:KIRSTGRAB_YT_DLP_VERSION"
+            "deno=$env:KIRSTGRAB_DENO_VERSION"
+            "ffmpeg-release=$env:KIRSTGRAB_FFMPEG_RELEASE"
+            "ffmpeg=$env:KIRSTGRAB_FFMPEG_VERSION"
+            ''
+            '[Python packages]'
+          ) | Set-Content -LiteralPath BUILD-MANIFEST.txt -Encoding utf8
+          python -m pip freeze | Add-Content -LiteralPath BUILD-MANIFEST.txt -Encoding utf8
+          Add-Content -LiteralPath BUILD-MANIFEST.txt -Value "`n[FFmpeg build]" -Encoding utf8
+          & .\ffmpeg\ffmpeg.exe -version | Add-Content -LiteralPath BUILD-MANIFEST.txt -Encoding utf8
 
       - name: Build executable
         run: |
@@ -119,6 +153,7 @@ jobs:
             '--add-data', 'icon.ico;.',
             '--add-data', 'LICENSE;.',
             '--add-data', 'THIRD_PARTY_NOTICES.md;.',
+            '--add-data', 'BUILD-MANIFEST.txt;.',
             '--add-binary', 'yt-dlp.exe;bin',
             '--add-binary', 'ffmpeg\ffmpeg.exe;bin',
             '--add-binary', 'ffmpeg\ffprobe.exe;bin',
@@ -135,7 +170,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           $exe = Get-Item -LiteralPath dist\KirstGrab.exe
-          Compress-Archive -Path $exe.FullName,LICENSE,THIRD_PARTY_NOTICES.md -DestinationPath "release-$env:RELEASE_VERSION.zip" -Force
+          Compress-Archive -Path $exe.FullName,LICENSE,THIRD_PARTY_NOTICES.md,BUILD-MANIFEST.txt -DestinationPath "release-$env:RELEASE_VERSION.zip" -Force
 
       - name: Upload Windows archive
         uses: actions/upload-artifact@v4

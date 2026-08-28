@@ -36,7 +36,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.13.13"
+  PYTHON_VERSION: "3.13"
 
 jobs:
   build:
@@ -69,14 +69,12 @@ jobs:
 
       - name: Validate source
         run: |
-          python -m py_compile KirstGrab.py kirstgrab_platform.py scripts/verify_macos_bundle.py
+          python -m py_compile KirstGrab.py kirstgrab_platform.py scripts/verify_sha256.py scripts/verify_macos_bundle.py
           python -m unittest discover -s tests -v
           python -c 'import tkinter; print(f"Tk {tkinter.TkVersion}")'
           test "$(uname -m)" = "arm64"
 
       - name: Build and test ad-hoc-signed app
-        env:
-          KIRSTGRAB_REFRESH_HOMEBREW: "1"
         run: bash ./build-local-macos.sh --version "${{ steps.version.outputs.value }}"
 
       - name: Require complete Apple signing configuration

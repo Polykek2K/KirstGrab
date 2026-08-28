@@ -31,13 +31,15 @@ bash ./build-local-macos.sh
 - `dist/KirstGrab.app`;
 - `KirstGrab-<version>-macos-<architecture>.zip`.
 
-Для повторной сборки с уже загруженными `yt-dlp` и Deno используйте `--skip-download`. Версия аргумента обязана совпадать с `CURRENT_VERSION`. Проверка сборки запускает все вложенные утилиты, сканирует каждый Mach-O и symlink внутри bundle, проверяет архитектуру, переносимость `otool`, `Info.plist` и code signature. Production workflow повторяет эти runtime-проверки после финальной Developer ID подписи и до notarization. В приложение добавляется `BUILD-MANIFEST.txt` с точными версиями и конфигурацией FFmpeg.
+Каждая сборка заново загружает последние релизы `yt-dlp` и Deno с проверкой SHA-256, а также обновляет FFmpeg до последней доступной формулы Homebrew. Версия аргумента обязана совпадать с `CURRENT_VERSION`. Проверка сборки запускает все вложенные утилиты, сканирует каждый Mach-O и symlink внутри bundle, проверяет архитектуру, переносимость `otool`, `Info.plist` и code signature. Production workflow повторяет эти runtime-проверки после финальной Developer ID подписи и до notarization. В приложение добавляется `BUILD-MANIFEST.txt` с точными фактически использованными версиями и конфигурацией FFmpeg.
 
 Без `KIRSTGRAB_CODESIGN_IDENTITY` создаётся ad-hoc signed development build. Для публичного распространения задайте Developer ID Application identity, подпишите приложение и выполните notarization — workflow поддерживает это через secrets, перечисленные ниже.
 
 ## GitHub Actions release
 
 Сборки разделены на reusable workflows `Build Windows` и `Build macOS`; каждый из них можно запустить отдельно для получения платформенного Actions artifact. Единственный источник версии — `CURRENT_VERSION` в `KirstGrab.py`.
+
+Точные версии встроенных `yt-dlp`, Deno и FFmpeg, а также Python-пакетов не зашиты в workflows: свежие выпуски разрешаются при каждом запуске, а выбранные версии записываются в `BUILD-MANIFEST.txt`. Python ограничен совместимой веткой 3.13, но конкретный patch-релиз выбирает `setup-python`.
 
 Общий workflow `Build and Release` читает эту версию один раз и передаёт одинаковое значение выбранным сборкам. Параметр `target` принимает `windows`, `macos` или `all`, поэтому можно собрать и выпустить одну платформу либо обе сразу. По умолчанию workflow работает в безопасном режиме build-only и не создаёт тег или Release.
 
