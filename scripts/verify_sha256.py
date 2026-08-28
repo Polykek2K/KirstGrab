@@ -12,6 +12,9 @@ from pathlib import Path
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+POWERSHELL_HASH_PATTERN = re.compile(
+    r"^\s*Hash\s*:\s*([0-9a-fA-F]{64})\s*$", re.IGNORECASE
+)
 
 
 def expected_digest(checksum_text: str, entry_name: str | None = None) -> str:
@@ -20,6 +23,11 @@ def expected_digest(checksum_text: str, entry_name: str | None = None) -> str:
     named_entries_seen = False
 
     for line in checksum_text.splitlines():
+        powershell_match = POWERSHELL_HASH_PATTERN.fullmatch(line)
+        if powershell_match:
+            unnamed_matches.append(powershell_match.group(1).lower())
+            continue
+
         fields = line.strip().split()
         if not fields or not SHA256_PATTERN.fullmatch(fields[0]):
             continue

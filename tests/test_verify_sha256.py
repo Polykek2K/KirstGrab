@@ -16,6 +16,19 @@ class VerifySha256Tests(unittest.TestCase):
         digest = "c" * 64
         self.assertEqual(expected_digest(f"{digest}\n", "archive.zip"), digest)
 
+    def test_accepts_windows_powershell_checksum(self):
+        digest = "c1" * 32
+        checksums = "\n".join(
+            (
+                "Algorithm : SHA256",
+                f"Hash      : {digest.upper()}",
+                r"Path      : D:\a\deno\deno-x86_64-pc-windows-msvc.zip",
+            )
+        )
+        self.assertEqual(
+            expected_digest(checksums, "deno-x86_64-pc-windows-msvc.zip"), digest
+        )
+
     def test_rejects_missing_entry(self):
         with self.assertRaises(ValueError):
             expected_digest(f"{'d' * 64}  other.zip\n", "archive.zip")

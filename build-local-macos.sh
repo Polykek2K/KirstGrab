@@ -172,14 +172,16 @@ if ! brew list --versions ffmpeg >/dev/null 2>&1; then
     brew install ffmpeg
 fi
 
-INSTALLED_FFMPEG_VERSION=$(brew list --versions ffmpeg | awk '{ print $2; exit }')
+# Homebrew can retain the old keg after an upgrade and prints every installed
+# version on one line. The last field is the newly installed, linked version.
+INSTALLED_FFMPEG_VERSION=$(brew list --versions ffmpeg | awk '{ print $NF; exit }')
 INSTALLED_FFMPEG_UPSTREAM_VERSION=${INSTALLED_FFMPEG_VERSION%%_*}
 if [ "$INSTALLED_FFMPEG_UPSTREAM_VERSION" != "$FFMPEG_VERSION" ] && \
         [ "${KIRSTGRAB_REFRESH_HOMEBREW:-0}" = "1" ]; then
     echo "==> Updating Homebrew FFmpeg $INSTALLED_FFMPEG_VERSION to $FFMPEG_VERSION"
     brew update
     brew upgrade ffmpeg
-    INSTALLED_FFMPEG_VERSION=$(brew list --versions ffmpeg | awk '{ print $2; exit }')
+    INSTALLED_FFMPEG_VERSION=$(brew list --versions ffmpeg | awk '{ print $NF; exit }')
     INSTALLED_FFMPEG_UPSTREAM_VERSION=${INSTALLED_FFMPEG_VERSION%%_*}
 fi
 
