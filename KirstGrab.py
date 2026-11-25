@@ -10,11 +10,9 @@ import urllib.parse
 import json
 import tempfile
 import shutil
-import zipfile
 import re
-import hashlib
-import shlex
-import plistlib
+import webbrowser
+from pathlib import Path
 
 from kirstgrab_platform import (
     bundled_binary_paths,
@@ -22,13 +20,18 @@ from kirstgrab_platform import (
     cookies_file_path,
     directory_is_writable,
     find_macos_app_bundle,
-    find_macos_app_in_tree,
     macos_app_requires_manual_replacement,
     release_platform_key,
     select_release_asset,
 )
 
-MACOS_BUNDLE_IDENTIFIER = "com.polykek2k.kirstgrab"
+from kirstgrab_updater import (
+    download_release_archive,
+    extract_release_archive,
+    find_update_payload,
+    launch_update_helper,
+    release_sha256,
+)
 
 try:
     from PIL import Image, ImageTk, ImageFont
@@ -49,21 +52,6 @@ else:
 def resource_path(relative_path):
     base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
-
-def macos_codesign_team_identifier(app_path):
-    """Return the signing team for an app, or None for an ad-hoc signature."""
-    result = subprocess.run(
-        ["/usr/bin/codesign", "-dv", "--verbose=4", app_path],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    details = "\n".join((result.stdout, result.stderr))
-    match = re.search(r"^TeamIdentifier=(.+)$", details, flags=re.MULTILINE)
-    if not match:
-        return None
-    team_identifier = match.group(1).strip()
-    return None if team_identifier.lower() in {"", "not set"} else team_identifier
 
 def ensure_cookies_file(path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -133,7 +121,7 @@ def paste_cookies():
 
 
 # Current version - update this when releasing new versions
-CURRENT_VERSION = "1.6.7"
+CURRENT_VERSION = "1.6.8"
 GITHUB_REPO = "Polykek2K/KirstGrab"
 
 
@@ -181,24 +169,16 @@ def compare_versions(current, latest):
     except Exception:
         return False
 
-def download_file(url, filepath, progress_callback=None):
-    """Download a file with progress callback"""
-    try:
-        def download_progress(block_num, block_size, total_size):
-            if progress_callback and total_size > 0:
-                downloaded = block_num * block_size
-                percent = min(100, (downloaded / total_size) * 100)
-                progress_callback(percent)
-        
-        urllib.request.urlretrieve(url, filepath, reporthook=download_progress)
-        return True
-    except Exception as e:
-        print(f"Error downloading file: {e}")
-        return False
+update_dialog = None
+
 
 def show_update_dialog(latest_info):
-    """Show update dialog with latest version information"""
-    dialog = tk.Toplevel(root)
+    """Show the available update or focus the existing dialog."""
+    global update_dialog
+    if update_dialog is not None and update_dialog.winfo_exists():
+        update_dialog.lift()
+        return
+    dialog = update_dialog = tk.Toplevel(root)
     dialog.title("Update Available")
     dialog.geometry("450x350")
     dialog.resizable(False, False)
@@ -213,8 +193,6 @@ def show_update_dialog(latest_info):
     
     # Update info
     latest_version = latest_info.get('tag_name', 'Unknown')
-    release_name = latest_info.get('name', 'Latest Release')
-    release_notes = latest_info.get('body', 'No release notes available.')
 
     if sys.platform == "darwin":
         dialog.geometry("480x340")
@@ -260,20 +238,22 @@ def show_update_dialog(latest_info):
 
         button_frame = ttk.Frame(update_content, style="MacRoot.TFrame")
         button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
-        ttk.Button(
+        update_button = ttk.Button(
             button_frame,
             text="Update now",
             style="MacAccent.TButton",
             command=lambda: start_update(
-                dialog, latest_info, progress_label, progress_bar, progress_frame
+                dialog, latest_info, progress_label, progress_bar, (update_button, later_button)
             ),
-        ).pack(side=tk.RIGHT)
-        ttk.Button(
+        )
+        update_button.pack(side=tk.RIGHT)
+        later_button = ttk.Button(
             button_frame,
             text="Not now",
             style="Mac.TButton",
             command=dialog.destroy,
-        ).pack(side=tk.RIGHT, padx=(0, 10))
+        )
+        later_button.pack(side=tk.RIGHT, padx=(0, 10))
         return
     
     # Title
@@ -317,7 +297,10 @@ def show_update_dialog(latest_info):
                              activebackground="#c0392b",
                              bd=0, padx=25, pady=12,
                              width=12,
-                             command=lambda: start_update(dialog, latest_info, progress_label, progress_bar, progress_frame))
+                             command=lambda: start_update(
+                                 dialog, latest_info, progress_label, progress_bar,
+                                 (update_button, later_button, skip_button)
+                             ))
     update_button.pack(side="left", padx=8)
     
     later_button = tk.Button(button_frame, text="⏰ Later", 
@@ -338,627 +321,112 @@ def show_update_dialog(latest_info):
                            command=dialog.destroy)
     skip_button.pack(side="left", padx=8)
 
-def start_update(dialog, latest_info, progress_label, progress_bar, progress_frame):
-    """Start the update process"""
-    def run_on_ui(callback):
-        try:
-            root.after(0, callback)
-        except tk.TclError:
-            pass
+def start_update(dialog, latest_info, progress_label, progress_bar, buttons):
+    """Download and prepare an update while the application is still running."""
+    for button in buttons:
+        button.configure(state=tk.DISABLED)
+    dialog.protocol("WM_DELETE_WINDOW", lambda: None)
 
-    def set_progress(text=None, percent=None):
+    def set_progress(text, percent):
         def apply_progress():
-            try:
-                if not dialog.winfo_exists():
-                    return
-                if text is not None:
-                    progress_label.config(text=text)
-                if percent is not None:
-                    progress_total_width = 300
-                    if sys.platform == "darwin":
-                        progress_total_width = max(progress_bar.master.winfo_width(), 300)
-                    progress_width = int(progress_total_width * (percent / 100))
-                    progress_bar.config(width=progress_width)
-            except tk.TclError:
-                pass
-        run_on_ui(apply_progress)
+            if not dialog.winfo_exists():
+                return
+            progress_label.configure(text=text)
+            width = progress_bar.master.winfo_width() if sys.platform == "darwin" else 300
+            progress_bar.configure(width=int(width * percent / 100))
+        root.after(0, apply_progress)
 
-    def show_update_error(message, title="Update Error"):
-        def show_error():
-            try:
-                messagebox.showerror(title, message)
-            except tk.TclError:
-                pass
-        set_progress("Update failed!")
-        run_on_ui(show_error)
+    def show_failure(message, manual=False):
+        def show_message():
+            if not dialog.winfo_exists():
+                return
+            for button in buttons:
+                button.configure(state=tk.NORMAL)
+            dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+            if manual:
+                messagebox.showinfo("Manual Update Required", message, parent=dialog)
+                release_url = latest_info.get("html_url")
+                if release_url:
+                    webbrowser.open(release_url)
+            else:
+                messagebox.showerror("Update Error", message, parent=dialog)
+        set_progress("Manual update required" if manual else "Update failed", 0)
+        root.after(0, show_message)
 
-    def close_application():
-        try:
-            root.quit()
-            root.destroy()
-        except tk.TclError:
-            pass
-
-    def cleanup_temp_files(temp_zip, extract_dir, helper_script=None):
-        if temp_zip and os.path.exists(temp_zip):
-            try:
-                os.remove(temp_zip)
-            except OSError:
-                pass
-        if extract_dir and os.path.exists(extract_dir):
-            shutil.rmtree(extract_dir, ignore_errors=True)
-        if helper_script and os.path.exists(helper_script):
-            try:
-                os.remove(helper_script)
-            except OSError:
-                pass
-
-    def batch_escape(value):
-        return str(value).replace("%", "%%")
-
-    def write_windows_updater(batch_script, current_pid, current_exe, temp_exe, temp_zip, extract_dir, backup_path):
-        log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
-        script = f'''@echo off
-setlocal EnableExtensions
-chcp 65001 >nul
-set "PID={current_pid}"
-set "SOURCE={batch_escape(temp_exe)}"
-set "DEST={batch_escape(current_exe)}"
-set "BACKUP={batch_escape(backup_path)}"
-set "TEMPZIP={batch_escape(temp_zip)}"
-set "EXTRACTDIR={batch_escape(extract_dir)}"
-set "LOG={batch_escape(log_path)}"
-
-echo KirstGrab update started > "%LOG%"
-for /F "tokens=1 delims==" %%V in ('set _PYI_ 2^>nul') do set "%%V="
-set "_MEIPASS2="
-set "PYINSTALLER_RESET_ENVIRONMENT=1"
-echo Waiting for process %PID% to exit... >> "%LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Wait-Process -Id %PID% -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 1500" >> "%LOG%" 2>&1
-echo Process %PID% exited; preparing replacement. >> "%LOG%"
-
-if not exist "%SOURCE%" (
-    echo ERROR: New executable not found: %SOURCE% >> "%LOG%"
-    goto update_failed
-)
-
-if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
-
-for /L %%A in (1,1,60) do (
-    if not exist "%DEST%" goto install_update
-    echo Backing up current executable (attempt %%A)... >> "%LOG%"
-    move /Y "%DEST%" "%BACKUP%" >> "%LOG%" 2>&1
-    if not errorlevel 1 goto install_update
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Milliseconds 500" >nul 2>&1
-)
-echo ERROR: Current executable stayed locked for 30 seconds. >> "%LOG%"
-goto update_failed
-
-:install_update
-echo Installing new executable... >> "%LOG%"
-copy /Y "%SOURCE%" "%DEST%" >> "%LOG%" 2>&1
-if errorlevel 1 (
-    echo ERROR: Copy failed. Restoring backup if possible. >> "%LOG%"
-    if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
-    goto update_failed
-)
-powershell -NoProfile -ExecutionPolicy Bypass -Command "if ((Get-FileHash -LiteralPath $env:SOURCE -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $env:DEST -Algorithm SHA256).Hash) {{ exit 1 }}" >> "%LOG%" 2>&1
-if errorlevel 1 (
-    echo ERROR: Installed executable hash does not match the downloaded executable. >> "%LOG%"
-    del /f /q "%DEST%" >> "%LOG%" 2>&1
-    if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
-    goto update_failed
-)
-
-if exist "%BACKUP%" del /f /q "%BACKUP%" >> "%LOG%" 2>&1
-if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
-if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
-
-for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
-echo Starting updated KirstGrab... >> "%LOG%"
-start "" /D "%DESTDIR%" "%DEST%"
-
-echo Update completed successfully. >> "%LOG%"
-del /f /q "%~f0" >nul 2>&1
-exit /b 0
-
-:update_failed
-if not exist "%DEST%" if exist "%BACKUP%" move /Y "%BACKUP%" "%DEST%" >> "%LOG%" 2>&1
-if not exist "%DEST%" goto cleanup_failed_update
-for %%I in ("%DEST%") do set "DESTDIR=%%~dpI"
-start "" /D "%DESTDIR%" "%DEST%"
-powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show(('Automatic update failed. The previous version was restored.' + [Environment]::NewLine + 'Log: ' + $env:LOG), 'KirstGrab Update')" >> "%LOG%" 2>&1
-:cleanup_failed_update
-if exist "%TEMPZIP%" del /f /q "%TEMPZIP%" >> "%LOG%" 2>&1
-if exist "%EXTRACTDIR%" rmdir /s /q "%EXTRACTDIR%" >> "%LOG%" 2>&1
-del /f /q "%~f0" >nul 2>&1
-exit /b 1
-'''
-        with open(batch_script, "w", encoding="utf-8") as f:
-            f.write(script)
-
-    def launch_windows_updater(batch_script, temp_zip, extract_dir, requires_admin):
-        def launch_and_close():
-            try:
-                permission_note = ""
-                if requires_admin:
-                    permission_note = "\nWindows will ask for administrator permission."
-                messagebox.showinfo(
-                    "Update Ready",
-                    "Update downloaded successfully.\n"
-                    "KirstGrab will close now and restart after the file is replaced."
-                    f"{permission_note}"
-                )
-
-                creationflags = 0
-                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-                    creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
-                if hasattr(subprocess, "CREATE_NO_WINDOW"):
-                    creationflags |= subprocess.CREATE_NO_WINDOW
-                creationflags |= getattr(
-                    subprocess,
-                    "CREATE_BREAKAWAY_FROM_JOB",
-                    0x01000000,
-                )
-
-                child_env = clean_subprocess_environment()
-                child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-                command_processor = os.environ.get("COMSPEC", "cmd.exe")
-                command = [command_processor, "/d", "/c", "call", batch_script]
-                if requires_admin:
-                    parameters = subprocess.list2cmdline(command[1:])
-                    result = ctypes.windll.shell32.ShellExecuteW(
-                        None,
-                        "runas",
-                        command_processor,
-                        parameters,
-                        os.path.dirname(sys.executable),
-                        0,
-                    )
-                    if result <= 32:
-                        raise OSError(f"Administrator launch failed with code {result}")
-                else:
-                    try:
-                        subprocess.Popen(
-                            command,
-                            close_fds=True,
-                            creationflags=creationflags,
-                            env=child_env,
-                        )
-                    except OSError as breakaway_error:
-                        broker_env = child_env.copy()
-                        broker_env["KIRSTGRAB_UPDATER_COMMAND"] = (
-                            subprocess.list2cmdline(command)
-                        )
-                        broker_command = [
-                            "powershell.exe",
-                            "-NoProfile",
-                            "-NonInteractive",
-                            "-ExecutionPolicy",
-                            "Bypass",
-                            "-Command",
-                            "$result = Invoke-CimMethod -ClassName Win32_Process "
-                            "-MethodName Create -Arguments "
-                            "@{CommandLine=$env:KIRSTGRAB_UPDATER_COMMAND}; "
-                            "if ($null -eq $result -or $result.ReturnValue -ne 0) "
-                            "{ throw ('Win32_Process.Create failed: ' + "
-                            "$result.ReturnValue) }",
-                        ]
-                        broker_flags = getattr(
-                            subprocess,
-                            "CREATE_NO_WINDOW",
-                            0x08000000,
-                        )
-                        try:
-                            subprocess.run(
-                                broker_command,
-                                check=True,
-                                timeout=20,
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                creationflags=broker_flags,
-                                env=broker_env,
-                            )
-                        except Exception as broker_error:
-                            raise OSError(
-                                "Could not detach the Windows updater "
-                                f"(breakaway: {breakaway_error}; "
-                                f"broker: {broker_error})"
-                            ) from broker_error
-
-                try:
-                    dialog.grab_release()
-                    dialog.destroy()
-                except tk.TclError:
-                    pass
-                root.after(100, close_application)
-            except Exception as e:
-                cleanup_temp_files(temp_zip, extract_dir, batch_script)
-                messagebox.showerror("Update Error", f"Failed to start updater: {e}")
-                set_progress("Update failed!")
-        run_on_ui(launch_and_close)
-
-    def write_macos_updater(
-        helper_script,
-        current_pid,
-        source_app,
-        destination_app,
-        temp_zip,
-        extract_dir,
-        requires_admin,
-    ):
-        log_path = os.path.join(tempfile.gettempdir(), "KirstGrab_update.log")
-        quoted = {
-            "source": shlex.quote(source_app),
-            "destination": shlex.quote(destination_app),
-            "backup": shlex.quote(destination_app + ".backup"),
-            "staged": shlex.quote(destination_app + ".new"),
-            "temp_zip": shlex.quote(temp_zip),
-            "extract_dir": shlex.quote(extract_dir),
-            "log": shlex.quote(log_path),
-            "script": shlex.quote(helper_script),
-        }
-        script = f'''#!/bin/sh
-set -u
-PID={current_pid}
-REQUIRES_ADMIN={1 if requires_admin else 0}
-SOURCE={quoted["source"]}
-DEST={quoted["destination"]}
-BACKUP={quoted["backup"]}
-STAGED={quoted["staged"]}
-TEMPZIP={quoted["temp_zip"]}
-EXTRACTDIR={quoted["extract_dir"]}
-LOG={quoted["log"]}
-SCRIPT={quoted["script"]}
-
-log() {{
-    /bin/echo "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$LOG"
-}}
-
-install_bundle() {{
-    if ! /bin/rm -rf "$STAGED"; then
-        return 10
-    fi
-    if ! /usr/bin/ditto "$SOURCE" "$STAGED"; then
-        /bin/rm -rf "$STAGED"
-        return 11
-    fi
-    if [ ! -x "$STAGED/Contents/MacOS/KirstGrab" ]; then
-        /bin/rm -rf "$STAGED"
-        return 12
-    fi
-
-    if ! /bin/rm -rf "$BACKUP"; then
-        /bin/rm -rf "$STAGED"
-        return 13
-    fi
-    if [ -d "$DEST" ] && ! /bin/mv "$DEST" "$BACKUP"; then
-        /bin/rm -rf "$STAGED"
-        return 14
-    fi
-    if ! /bin/mv "$STAGED" "$DEST"; then
-        if [ -d "$BACKUP" ]; then
-            /bin/mv "$BACKUP" "$DEST" || true
-        fi
-        return 15
-    fi
-    if ! /usr/bin/codesign --verify --deep --strict "$DEST" >> "$LOG" 2>&1; then
-        /bin/rm -rf "$DEST"
-        if [ -d "$BACKUP" ]; then
-            /bin/mv "$BACKUP" "$DEST" || true
-        fi
-        return 16
-    fi
-    /bin/rm -rf "$BACKUP" || log "WARNING: Could not remove the previous app backup"
-    return 0
-}}
-
-fail() {{
-    log "ERROR: $1"
-    /bin/rm -rf "$STAGED"
-    if [ -d "$DEST" ]; then
-        PYINSTALLER_RESET_ENVIRONMENT=1 /usr/bin/open -n "$DEST" >> "$LOG" 2>&1 || \
-            log "ERROR: Could not reopen KirstGrab after the failed update"
-    fi
-    /usr/bin/osascript -e 'display alert "KirstGrab update failed" message "The update did not finish. See KirstGrab_update.log in the temporary folder for details." as critical' >/dev/null 2>&1 || true
-    /bin/rm -f "$TEMPZIP"
-    /bin/rm -rf "$EXTRACTDIR"
-    /bin/rm -f "$SCRIPT"
-    exit 1
-}}
-
-if [ "${{1:-}}" = "--install" ]; then
-    install_bundle
-    exit $?
-fi
-
-: > "$LOG"
-log "KirstGrab macOS update started"
-while /bin/kill -0 "$PID" 2>/dev/null; do
-    /bin/sleep 0.2
-done
-
-if [ "$REQUIRES_ADMIN" = "1" ]; then
-    log "Requesting administrator permission to replace the app bundle"
-    if ! /usr/bin/osascript - "$SCRIPT" >> "$LOG" 2>&1 <<'APPLESCRIPT'
-on run argv
-    set updaterPath to item 1 of argv
-    do shell script "/bin/sh " & quoted form of updaterPath & " --install" with administrator privileges
-end run
-APPLESCRIPT
-    then
-        fail "Administrator authorization or privileged installation failed"
-    fi
-elif ! install_bundle; then
-    fail "Could not replace the app bundle"
-fi
-
-if ! PYINSTALLER_RESET_ENVIRONMENT=1 /usr/bin/open -n "$DEST"; then
-    fail "Could not restart KirstGrab"
-fi
-log "Update completed successfully"
-/bin/rm -f "$TEMPZIP"
-/bin/rm -rf "$EXTRACTDIR"
-/bin/rm -f "$SCRIPT"
-'''
-        with open(helper_script, "w", encoding="utf-8", newline="\n") as file:
-            file.write(script)
-        os.chmod(helper_script, 0o700)
-
-    def launch_macos_updater(helper_script, temp_zip, extract_dir, requires_admin):
-        def launch_and_close():
-            try:
-                permission_note = ""
-                if requires_admin:
-                    permission_note = "\nmacOS will ask for administrator permission."
-                messagebox.showinfo(
-                    "Update Ready",
-                    "Update downloaded successfully.\n"
-                    "KirstGrab will close and restart after the app bundle is replaced."
-                    f"{permission_note}"
-                )
-                child_env = clean_subprocess_environment()
-                child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-                subprocess.Popen(
-                    ["/bin/sh", helper_script],
-                    close_fds=True,
-                    start_new_session=True,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    env=child_env,
-                )
-                try:
-                    dialog.grab_release()
-                    dialog.destroy()
-                except tk.TclError:
-                    pass
-                root.after(100, close_application)
-            except Exception as error:
-                cleanup_temp_files(temp_zip, extract_dir, helper_script)
-                messagebox.showerror("Update Error", f"Failed to start updater: {error}")
-                set_progress("Update failed!")
-        run_on_ui(launch_and_close)
-
-    def show_manual_update(message):
-        release_url = latest_info.get("html_url", "")
-
-        def show_instructions():
-            messagebox.showinfo("Manual Update Required", message)
-            if release_url and sys.platform == "darwin":
-                subprocess.Popen(["/usr/bin/open", release_url])
-
-        set_progress("Manual update required")
-        run_on_ui(show_instructions)
-
-    def verify_download_digest(filepath, asset):
-        raw_digest = asset.get("digest")
-        if not raw_digest:
-            raise ValueError("Release asset has no SHA-256 digest; use a manual update")
-        digest = str(raw_digest)
-        algorithm, separator, expected = digest.partition(":")
-        if separator != ":" or algorithm.lower() != "sha256" or not expected:
-            raise ValueError(f"Unsupported release digest: {digest}")
-
-        hasher = hashlib.sha256()
-        with open(filepath, "rb") as downloaded_file:
-            for chunk in iter(lambda: downloaded_file.read(1024 * 1024), b""):
-                hasher.update(chunk)
-        if hasher.hexdigest().lower() != expected.lower():
-            raise ValueError("Downloaded update failed SHA-256 verification")
-
-    def extract_update_archive(filepath, destination):
-        destination_root = os.path.abspath(destination)
-        with zipfile.ZipFile(filepath, "r") as archive:
-            for member in archive.infolist():
-                target = os.path.abspath(os.path.join(destination_root, member.filename))
-                if os.path.commonpath([destination_root, target]) != destination_root:
-                    raise ValueError(f"Unsafe path in update archive: {member.filename}")
-
-        if sys.platform == "darwin":
-            subprocess.run(
-                ["/usr/bin/ditto", "-x", "-k", filepath, destination],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            return
-
-        with zipfile.ZipFile(filepath, "r") as archive:
-            archive.extractall(destination_root)
-
-    def update_progress(percent):
-        set_progress(f"Downloading update... {percent:.1f}%", percent)
-    
     def download_and_replace():
-        temp_zip = None
-        extract_dir = None
-        updater_handoff = False
+        work_dir = None
         try:
-            assets = latest_info.get('assets', [])
-            zip_asset = select_release_asset(assets)
-
-            if not zip_asset:
-                platform_key = release_platform_key()
-                show_update_error(f"Could not find a release package for {platform_key}.", "Error")
+            if not getattr(sys, "frozen", False) or sys.platform not in ("win32", "darwin"):
+                show_failure("Open the release page to install the packaged application.", manual=True)
                 return
 
-            if not getattr(sys, 'frozen', False):
-                show_update_error("Automatic replacement is available only in the packaged application.")
+            asset = select_release_asset(latest_info.get("assets") or [])
+            if not asset:
+                show_failure(f"This release has no package for {release_platform_key()}.", manual=True)
+                return
+            digest = release_sha256(asset)
+            if not digest:
+                show_failure("This release package has no valid SHA-256 checksum.", manual=True)
                 return
 
-            temp_dir = tempfile.gettempdir()
-            asset_name = os.path.basename(zip_asset.get('name', 'release.zip'))
-            temp_zip = os.path.join(temp_dir, f"KirstGrab_update_{os.getpid()}_{asset_name}")
+            destination = Path(sys.executable).resolve()
+            if sys.platform == "darwin":
+                bundle = find_macos_app_bundle(str(destination))
+                if not bundle or macos_app_requires_manual_replacement(bundle):
+                    show_failure(
+                        "Move KirstGrab.app to Applications and launch it there, or install the update manually.",
+                        manual=True,
+                    )
+                    return
+                destination = Path(bundle)
+            if not directory_is_writable(destination.parent):
+                show_failure("Install the update manually to replace KirstGrab in this folder.", manual=True)
+                return
+
+            url = asset.get("browser_download_url")
+            if not url:
+                raise ValueError("The release package has no download URL")
+            work_dir = Path(tempfile.mkdtemp(prefix="KirstGrab_update_"))
+            archive = work_dir / "release.zip"
+            extracted = work_dir / "extracted"
 
             set_progress("Downloading update...", 0)
-
-            download_url = zip_asset.get('browser_download_url', '')
-            if not download_url or not download_file(download_url, temp_zip, update_progress):
-                show_update_error("Failed to download update!", "Error")
-                return
-
-            verify_download_digest(temp_zip, zip_asset)
-            set_progress("Extracting update...", 100)
-            extract_dir = tempfile.mkdtemp(prefix="KirstGrab_extract_")
-            extract_update_archive(temp_zip, extract_dir)
+            download_release_archive(
+                url, archive, digest,
+                lambda percent: set_progress(f"Downloading update... {percent:.1f}%", percent),
+            )
+            set_progress("Verifying release package...", 100)
+            extract_release_archive(archive, extracted)
+            source = find_update_payload(extracted, destination, latest_info.get("tag_name", ""))
             set_progress("Preparing restart...", 100)
-
-            if sys.platform.startswith("win"):
-                exe_files = []
-                for current_root, _directories, files in os.walk(extract_dir):
-                    for filename in files:
-                        if filename.lower().endswith('.exe') and 'kirstgrab' in filename.lower():
-                            exe_files.append(os.path.join(current_root, filename))
-
-                if not exe_files:
-                    show_update_error("Could not find KirstGrab.exe in the release package!", "Error")
-                    return
-
-                temp_exe = sorted(exe_files)[0]
-                current_exe = sys.executable
-                backup_path = current_exe + ".backup"
-                requires_admin = not directory_is_writable(os.path.dirname(current_exe))
-                batch_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.bat")
-                write_windows_updater(
-                    batch_script,
-                    os.getpid(),
-                    current_exe,
-                    temp_exe,
-                    temp_zip,
-                    extract_dir,
-                    backup_path
-                )
-                set_progress("Update ready. Restarting application...", 100)
-                updater_handoff = True
-                launch_windows_updater(
-                    batch_script,
-                    temp_zip,
-                    extract_dir,
-                    requires_admin,
-                )
-            elif sys.platform == "darwin":
-                source_app = find_macos_app_in_tree(extract_dir)
-                destination_app = find_macos_app_bundle(sys.executable)
-                if not source_app:
-                    show_update_error("Could not find KirstGrab.app in the release package!", "Error")
-                    return
-                subprocess.run(
-                    ["/usr/bin/codesign", "--verify", "--deep", "--strict", source_app],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                source_info_plist = os.path.join(source_app, "Contents", "Info.plist")
-                with open(source_info_plist, "rb") as plist_file:
-                    source_info = plistlib.load(plist_file)
-                source_bundle_identifier = source_info.get("CFBundleIdentifier")
-                if source_bundle_identifier != MACOS_BUNDLE_IDENTIFIER:
-                    raise ValueError(
-                        f"Unexpected update bundle identifier: {source_bundle_identifier!r}"
-                    )
-                expected_version = str(latest_info.get("tag_name", "")).lstrip("v")
-                source_version = str(source_info.get("CFBundleShortVersionString", "")).lstrip("v")
-                if source_version != expected_version:
-                    raise ValueError(
-                        f"Update bundle version {source_version!r} does not match release {expected_version!r}"
-                    )
-                if not destination_app:
-                    show_manual_update(
-                        "KirstGrab could not locate its current .app bundle. "
-                        "Download the matching macOS archive and replace KirstGrab.app manually."
-                    )
-                    return
-
-                subprocess.run(
-                    ["/usr/bin/codesign", "--verify", "--deep", "--strict", destination_app],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                current_team_identifier = macos_codesign_team_identifier(destination_app)
-                update_team_identifier = macos_codesign_team_identifier(source_app)
-                if current_team_identifier and update_team_identifier != current_team_identifier:
-                    raise ValueError(
-                        "The update is not signed by the same Apple Developer team as the installed app"
-                    )
-
-                destination_parent = os.path.dirname(destination_app)
-                if macos_app_requires_manual_replacement(destination_app):
-                    show_manual_update(
-                        "KirstGrab is running from a read-only or translocated location. "
-                        "Download the matching archive, move KirstGrab.app to Applications, "
-                        "and open it there once before using automatic updates."
-                    )
-                    return
-                requires_admin = not directory_is_writable(destination_parent)
-
-                helper_script = os.path.join(temp_dir, f"update_kirstgrab_{os.getpid()}.sh")
-                write_macos_updater(
-                    helper_script,
-                    os.getpid(),
-                    source_app,
-                    destination_app,
-                    temp_zip,
-                    extract_dir,
-                    requires_admin,
-                )
-                set_progress("Update ready. Restarting application...", 100)
-                updater_handoff = True
-                launch_macos_updater(
-                    helper_script,
-                    temp_zip,
-                    extract_dir,
-                    requires_admin,
-                )
-            else:
-                show_update_error("Automatic updates are not supported on this platform.")
-
+            launch_update_helper(work_dir, source, destination)
+            work_dir = None  # The helper now owns the temporary files.
+            root.after(0, root.destroy)
         except Exception as error:
-            show_update_error(f"Failed to update: {error}")
+            show_failure(f"Failed to prepare the update: {error}")
         finally:
-            if not updater_handoff:
-                cleanup_temp_files(temp_zip, extract_dir)
-    
-    # Start download in separate thread
+            if work_dir is not None:
+                shutil.rmtree(work_dir, ignore_errors=True)
+
     threading.Thread(target=download_and_replace, daemon=True).start()
 
-def check_for_updates():
-    """Check for updates on startup"""
+
+def check_for_updates(interactive=False):
+    """Check for updates in the background at startup or from the settings button."""
     def check_thread():
-        try:
-            latest_info = get_latest_release_info()
+        latest_info = get_latest_release_info()
+        if latest_info and compare_versions(CURRENT_VERSION, latest_info.get("tag_name", "")):
+            root.after(0, show_update_dialog, latest_info)
+        elif interactive:
             if latest_info:
-                latest_version = latest_info.get('tag_name', '')
-                if compare_versions(CURRENT_VERSION, latest_version):
-                    # Update available - show dialog in main thread
-                    root.after(0, lambda: show_update_dialog(latest_info))
-        except Exception as e:
-            print(f"Update check failed: {e}")
-    
-    # Check for updates in background thread
+                root.after(0, messagebox.showinfo, "No Updates",
+                           f"You are running the latest version ({CURRENT_VERSION})!")
+            else:
+                root.after(0, messagebox.showerror, "Update Check Failed",
+                           "Could not check for updates. Please check your internet connection.")
+
     threading.Thread(target=check_thread, daemon=True).start()
+
 
 def find_helper_executable(relative_path, development_candidates=()):
     executable = resource_path(relative_path)
@@ -1393,24 +861,13 @@ format_options = [
 ]
 
 def manual_update_check():
-    """Manually check for updates"""
-    try:
-        latest_info = get_latest_release_info()
-        if latest_info:
-            latest_version = latest_info.get('tag_name', '')
-            if compare_versions(CURRENT_VERSION, latest_version):
-                # Update available - show dialog
-                show_update_dialog(latest_info)
-            else:
-                messagebox.showinfo("No Updates", f"You are running the latest version ({CURRENT_VERSION})!")
-        else:
-            messagebox.showerror("Update Check Failed", "Could not check for updates. Please check your internet connection.")
-    except Exception as e:
-        messagebox.showerror("Update Check Error", f"Error checking for updates: {str(e)}")
+    check_for_updates(interactive=True)
+
 
 clip_var = tk.BooleanVar(value=False)
 clip_start_var = tk.StringVar()
 clip_end_var = tk.StringVar()
+
 
 def toggle_clip_controls():
     if clip_var.get():
