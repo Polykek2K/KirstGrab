@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -173,7 +173,7 @@ jobs:
           Compress-Archive -Path $exe.FullName,LICENSE,THIRD_PARTY_NOTICES.md,BUILD-MANIFEST.txt -DestinationPath "release-$env:RELEASE_VERSION.zip" -Force
 
       - name: Upload Windows archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-windows-x86_64
           path: release-${{ steps.version.outputs.value }}.zip
