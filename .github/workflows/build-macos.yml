@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -152,7 +152,7 @@ jobs:
           rm -f "$RUNNER_TEMP/kirstgrab-certificate.p12"
 
       - name: Upload macOS archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-macos-arm64
           path: KirstGrab-${{ steps.version.outputs.value }}-macos-arm64.zip
